@@ -1,6 +1,8 @@
-import React, { useContext, useEffect, useRef, useState } from 'react';
+import React, { useContext, useEffect, useRef, useState, useMemo, useCallback } from 'react';
 import { initVChartSemiTheme } from '@visactor/vchart-semi-theme';
 import { useNavigate } from 'react-router-dom';
+import { Wallet, Activity, Zap, Gauge, PieChart, Server, Bell, HelpCircle } from 'lucide-react';
+import { marked } from 'marked';
 
 import {
   Card,
@@ -9,6 +11,14 @@ import {
   IconButton,
   Modal,
   Avatar,
+  Tabs,
+  TabPane,
+  Empty,
+  Tag,
+  Timeline,
+  Collapse,
+  Progress,
+  Divider
 } from '@douyinfe/semi-ui';
 import {
   IconRefresh,
@@ -21,7 +31,11 @@ import {
   IconPulse,
   IconStopwatchStroked,
   IconTypograph,
+  IconPieChart2Stroked,
+  IconPlus,
+  IconMinus
 } from '@douyinfe/semi-icons';
+import { IllustrationConstruction, IllustrationConstructionDark } from '@douyinfe/semi-illustrations';
 import { VChart } from '@visactor/react-vchart';
 import {
   API,
@@ -34,47 +48,193 @@ import {
   modelColorMap,
   renderNumber,
   renderQuota,
-  modelToColor
+  modelToColor,
+  copy,
+  showSuccess,
+  getRelativeTime
 } from '../../helpers';
 import { UserContext } from '../../context/User/index.js';
+import { StatusContext } from '../../context/Status/index.js';
 import { useTranslation } from 'react-i18next';
 
 const Detail = (props) => {
+  // ========== Hooks - Context ==========
+  const [userState, userDispatch] = useContext(UserContext);
+  const [statusState, statusDispatch] = useContext(StatusContext);
+
+  // ========== Hooks - Navigation & Translation ==========
   const { t } = useTranslation();
   const navigate = useNavigate();
+
+  // ========== Hooks - Refs ==========
   const formRef = useRef();
+  const initialized = useRef(false);
+  const apiScrollRef = useRef(null);
+
+  // ========== Constants & Shared Configurations ==========
+  const CHART_CONFIG = { mode: 'desktop-browser' };
+
+  const CARD_PROPS = {
+    shadows: 'always',
+    bordered: false,
+    headerLine: true
+  };
+
+  const FORM_FIELD_PROPS = {
+    className: "w-full mb-2 !rounded-lg",
+    size: 'large'
+  };
+
+  const ICON_BUTTON_CLASS = "text-white hover:bg-opacity-80 !rounded-full";
+  const FLEX_CENTER_GAP2 = "flex items-center gap-2";
+
+  const ILLUSTRATION_SIZE = { width: 96, height: 96 };
+
+  // ========== Constants ==========
   let now = new Date();
-  const [userState, userDispatch] = useContext(UserContext);
+  const isAdminUser = isAdmin();
+
+  // ========== Panel enable flags ==========
+  const apiInfoEnabled = statusState?.status?.api_info_enabled ?? true;
+  const announcementsEnabled = statusState?.status?.announcements_enabled ?? true;
+  const faqEnabled = statusState?.status?.faq_enabled ?? true;
+  const uptimeEnabled = statusState?.status?.uptime_kuma_enabled ?? true;
+
+  const hasApiInfoPanel = apiInfoEnabled;
+  const hasInfoPanels = announcementsEnabled || faqEnabled || uptimeEnabled;
+
+  // ========== Helper Functions ==========
+  const getDefaultTime = useCallback(() => {
+    return localStorage.getItem('data_export_default_time') || 'hour';
+  }, []);
+
+  const getTimeInterval = useCallback((timeType, isSeconds = false) => {
+    const intervals = {
+      hour: isSeconds ? 3600 : 60,
+      day: isSeconds ? 86400 : 1440,
+      week: isSeconds ? 604800 : 10080
+    };
+    return intervals[timeType] || intervals.hour;
+  }, []);
+
+  const getInitialTimestamp = useCallback(() => {
+    const defaultTime = getDefaultTime();
+    const now = new Date().getTime() / 1000;
+
+    switch (defaultTime) {
+      case 'hour':
+        return timestamp2string(now - 86400);
+      case 'week':
+        return timestamp2string(now - 86400 * 30);
+      default:
+        return timestamp2string(now - 86400 * 7);
+    }
+  }, [getDefaultTime]);
+
+  const updateMapValue = useCallback((map, key, value) => {
+    if (!map.has(key)) {
+      map.set(key, 0);
+    }
+    map.set(key, map.get(key) + value);
+  }, []);
+
+  const initializeMaps = useCallback((key, ...maps) => {
+    maps.forEach(map => {
+      if (!map.has(key)) {
+        map.set(key, 0);
+      }
+    });
+  }, []);
+
+  const updateChartSpec = useCallback((setterFunc, newData, subtitle, newColors, dataId) => {
+    setterFunc(prev => ({
+      ...prev,
+      data: [{ id: dataId, values: newData }],
+      title: {
+        ...prev.title,
+        subtext: subtitle,
+      },
+      color: {
+        specified: newColors,
+      },
+    }));
+  }, []);
+
+  const createSectionTitle = useCallback((Icon, text) => (
+    <div className={FLEX_CENTER_GAP2}>
+      <Icon size={16} />
+      {text}
+    </div>
+  ), []);
+
+  const createFormField = useCallback((Component, props) => (
+    <Component {...FORM_FIELD_PROPS} {...props} />
+  ), []);
+
+  // ========== Time Options ==========
+  const timeOptions = useMemo(() => [
+    { label: t('小时'), value: 'hour' },
+    { label: t('天'), value: 'day' },
+    { label: t('周'), value: 'week' },
+  ], [t]);
+
+  // ========== Hooks - State ==========
   const [inputs, setInputs] = useState({
     username: '',
     token_name: '',
     model_name: '',
-    start_timestamp:
-      localStorage.getItem('data_export_default_time') === 'hour'
-        ? timestamp2string(now.getTime() / 1000 - 86400)
-        : localStorage.getItem('data_export_default_time') === 'week'
-          ? timestamp2string(now.getTime() / 1000 - 86400 * 30)
-          : timestamp2string(now.getTime() / 1000 - 86400 * 7),
+    start_timestamp: getInitialTimestamp(),
     end_timestamp: timestamp2string(now.getTime() / 1000 + 3600),
     channel: '',
     data_export_default_time: '',
   });
-  const { username, model_name, start_timestamp, end_timestamp, channel } =
-    inputs;
-  const isAdminUser = isAdmin();
-  const initialized = useRef(false);
+
+  const [dataExportDefaultTime, setDataExportDefaultTime] = useState(getDefaultTime());
+
   const [loading, setLoading] = useState(false);
   const [quotaData, setQuotaData] = useState([]);
   const [consumeQuota, setConsumeQuota] = useState(0);
   const [consumeTokens, setConsumeTokens] = useState(0);
   const [times, setTimes] = useState(0);
-  const [dataExportDefaultTime, setDataExportDefaultTime] = useState(
-    localStorage.getItem('data_export_default_time') || 'hour',
-  );
   const [pieData, setPieData] = useState([{ type: 'null', value: '0' }]);
   const [lineData, setLineData] = useState([]);
+
+  const [modelColors, setModelColors] = useState({});
+  const [activeChartTab, setActiveChartTab] = useState('1');
+  const [showApiScrollHint, setShowApiScrollHint] = useState(false);
   const [searchModalVisible, setSearchModalVisible] = useState(false);
 
+  const [trendData, setTrendData] = useState({
+    balance: [],
+    usedQuota: [],
+    requestCount: [],
+    times: [],
+    consumeQuota: [],
+    tokens: [],
+    rpm: [],
+    tpm: []
+  });
+
+  // ========== Additional Refs for new cards ==========
+  const announcementScrollRef = useRef(null);
+  const faqScrollRef = useRef(null);
+  const uptimeScrollRef = useRef(null);
+  const uptimeTabScrollRefs = useRef({});
+
+  // ========== Additional State for scroll hints ==========
+  const [showAnnouncementScrollHint, setShowAnnouncementScrollHint] = useState(false);
+  const [showFaqScrollHint, setShowFaqScrollHint] = useState(false);
+  const [showUptimeScrollHint, setShowUptimeScrollHint] = useState(false);
+
+  // ========== Uptime data ==========
+  const [uptimeData, setUptimeData] = useState([]);
+  const [uptimeLoading, setUptimeLoading] = useState(false);
+  const [activeUptimeTab, setActiveUptimeTab] = useState('');
+
+  // ========== Props Destructuring ==========
+  const { username, model_name, start_timestamp, end_timestamp, channel } = inputs;
+
+  // ========== Chart Specs State ==========
   const [spec_pie, setSpecPie] = useState({
     type: 'pie',
     data: [
@@ -131,6 +291,7 @@ const Detail = (props) => {
       specified: modelColorMap,
     },
   });
+
   const [spec_line, setSpecLine] = useState({
     type: 'bar',
     data: [
@@ -205,23 +366,35 @@ const Detail = (props) => {
     },
   });
 
-  // 添加一个新的状态来存储模型-颜色映射
-  const [modelColors, setModelColors] = useState({});
+  // ========== Hooks - Memoized Values ==========
+  const performanceMetrics = useMemo(() => {
+    const timeDiff = (Date.parse(end_timestamp) - Date.parse(start_timestamp)) / 60000;
+    const avgRPM = (times / timeDiff).toFixed(3);
+    const avgTPM = isNaN(consumeTokens / timeDiff) ? '0' : (consumeTokens / timeDiff).toFixed(3);
 
-  // 添加趋势数据状态
-  const [trendData, setTrendData] = useState({
-    balance: [],
-    usedQuota: [],
-    requestCount: [],
-    times: [],
-    consumeQuota: [],
-    tokens: [],
-    rpm: [],
-    tpm: []
-  });
+    return { avgRPM, avgTPM, timeDiff };
+  }, [times, consumeTokens, end_timestamp, start_timestamp]);
 
-  // 迷你趋势图配置
-  const getTrendSpec = (data, color) => ({
+  const getGreeting = useMemo(() => {
+    const hours = new Date().getHours();
+    let greeting = '';
+
+    if (hours >= 5 && hours < 12) {
+      greeting = t('早上好');
+    } else if (hours >= 12 && hours < 14) {
+      greeting = t('中午好');
+    } else if (hours >= 14 && hours < 18) {
+      greeting = t('下午好');
+    } else {
+      greeting = t('晚上好');
+    }
+
+    const username = userState?.user?.username || '';
+    return `👋${greeting}，${username}`;
+  }, [t, userState?.user?.username]);
+
+  // ========== Hooks - Callbacks ==========
+  const getTrendSpec = useCallback((data, color) => ({
     type: 'line',
     data: [{ id: 'trend', values: data.map((val, idx) => ({ x: idx, y: val })) }],
     xField: 'x',
@@ -255,33 +428,124 @@ const Detail = (props) => {
     background: {
       fill: 'transparent'
     }
-  });
+  }), []);
 
-  // 显示搜索Modal
-  const showSearchModal = () => {
-    setSearchModalVisible(true);
-  };
+  const groupedStatsData = useMemo(() => [
+    {
+      title: createSectionTitle(Wallet, t('账户数据')),
+      color: 'bg-blue-50',
+      items: [
+        {
+          title: t('当前余额'),
+          value: renderQuota(userState?.user?.quota),
+          icon: <IconMoneyExchangeStroked size="large" />,
+          avatarColor: 'blue',
+          onClick: () => navigate('/console/topup'),
+          trendData: [],
+          trendColor: '#3b82f6'
+        },
+        {
+          title: t('历史消耗'),
+          value: renderQuota(userState?.user?.used_quota),
+          icon: <IconHistogram size="large" />,
+          avatarColor: 'purple',
+          trendData: [],
+          trendColor: '#8b5cf6'
+        }
+      ]
+    },
+    {
+      title: createSectionTitle(Activity, t('使用统计')),
+      color: 'bg-green-50',
+      items: [
+        {
+          title: t('请求次数'),
+          value: userState.user?.request_count,
+          icon: <IconRotate size="large" />,
+          avatarColor: 'green',
+          trendData: [],
+          trendColor: '#10b981'
+        },
+        {
+          title: t('统计次数'),
+          value: times,
+          icon: <IconPulse size="large" />,
+          avatarColor: 'cyan',
+          trendData: trendData.times,
+          trendColor: '#06b6d4'
+        }
+      ]
+    },
+    {
+      title: createSectionTitle(Zap, t('资源消耗')),
+      color: 'bg-yellow-50',
+      items: [
+        {
+          title: t('统计额度'),
+          value: renderQuota(consumeQuota),
+          icon: <IconCoinMoneyStroked size="large" />,
+          avatarColor: 'yellow',
+          trendData: trendData.consumeQuota,
+          trendColor: '#f59e0b'
+        },
+        {
+          title: t('统计Tokens'),
+          value: isNaN(consumeTokens) ? 0 : consumeTokens,
+          icon: <IconTextStroked size="large" />,
+          avatarColor: 'pink',
+          trendData: trendData.tokens,
+          trendColor: '#ec4899'
+        }
+      ]
+    },
+    {
+      title: createSectionTitle(Gauge, t('性能指标')),
+      color: 'bg-indigo-50',
+      items: [
+        {
+          title: t('平均RPM'),
+          value: performanceMetrics.avgRPM,
+          icon: <IconStopwatchStroked size="large" />,
+          avatarColor: 'indigo',
+          trendData: trendData.rpm,
+          trendColor: '#6366f1'
+        },
+        {
+          title: t('平均TPM'),
+          value: performanceMetrics.avgTPM,
+          icon: <IconTypograph size="large" />,
+          avatarColor: 'orange',
+          trendData: trendData.tpm,
+          trendColor: '#f97316'
+        }
+      ]
+    }
+  ], [
+    createSectionTitle, t, userState?.user?.quota, userState?.user?.used_quota, userState?.user?.request_count,
+    times, consumeQuota, consumeTokens, trendData, performanceMetrics, navigate
+  ]);
 
-  // 关闭搜索Modal
-  const handleCloseModal = () => {
-    setSearchModalVisible(false);
-  };
+  const handleCopyUrl = useCallback(async (url) => {
+    if (await copy(url)) {
+      showSuccess(t('复制成功'));
+    }
+  }, [t]);
 
-  // 搜索Modal确认按钮
-  const handleSearchConfirm = () => {
-    refresh();
-    setSearchModalVisible(false);
-  };
+  const handleSpeedTest = useCallback((apiUrl) => {
+    const encodedUrl = encodeURIComponent(apiUrl);
+    const speedTestUrl = `https://www.tcptest.cn/http/${encodedUrl}`;
+    window.open(speedTestUrl, '_blank');
+  }, []);
 
-  const handleInputChange = (value, name) => {
+  const handleInputChange = useCallback((value, name) => {
     if (name === 'data_export_default_time') {
       setDataExportDefaultTime(value);
       return;
     }
     setInputs((inputs) => ({ ...inputs, [name]: value }));
-  };
+  }, []);
 
-  const loadQuotaData = async () => {
+  const loadQuotaData = useCallback(async () => {
     setLoading(true);
     try {
       let url = '';
@@ -304,7 +568,6 @@ const Detail = (props) => {
             created_at: now.getTime() / 1000,
           });
         }
-        // sort created_at
         data.sort((a, b) => a.created_at - b.created_at);
         updateChartData(data);
       } else {
@@ -313,72 +576,150 @@ const Detail = (props) => {
     } finally {
       setLoading(false);
     }
-  };
+  }, [start_timestamp, end_timestamp, username, dataExportDefaultTime, isAdminUser]);
 
-  const refresh = async () => {
+  const loadUptimeData = useCallback(async () => {
+    setUptimeLoading(true);
+    try {
+      const res = await API.get('/api/uptime/status');
+      const { success, message, data } = res.data;
+      if (success) {
+        setUptimeData(data || []);
+        if (data && data.length > 0 && !activeUptimeTab) {
+          setActiveUptimeTab(data[0].categoryName);
+        }
+      } else {
+        showError(message);
+      }
+    } catch (err) {
+      console.error(err);
+    } finally {
+      setUptimeLoading(false);
+    }
+  }, [activeUptimeTab]);
+
+  const refresh = useCallback(async () => {
+    await Promise.all([loadQuotaData(), loadUptimeData()]);
+  }, [loadQuotaData, loadUptimeData]);
+
+  const handleSearchConfirm = useCallback(() => {
+    refresh();
+    setSearchModalVisible(false);
+  }, [refresh]);
+
+  const initChart = useCallback(async () => {
     await loadQuotaData();
+    await loadUptimeData();
+  }, [loadQuotaData, loadUptimeData]);
+
+  const showSearchModal = useCallback(() => {
+    setSearchModalVisible(true);
+  }, []);
+
+  const handleCloseModal = useCallback(() => {
+    setSearchModalVisible(false);
+  }, []);
+
+  // ========== Regular Functions ==========
+  const checkApiScrollable = () => {
+    if (apiScrollRef.current) {
+      const element = apiScrollRef.current;
+      const isScrollable = element.scrollHeight > element.clientHeight;
+      const isAtBottom = element.scrollTop + element.clientHeight >= element.scrollHeight - 5;
+      setShowApiScrollHint(isScrollable && !isAtBottom);
+    }
   };
 
-  const initChart = async () => {
-    await loadQuotaData();
+  const handleApiScroll = () => {
+    checkApiScrollable();
   };
 
-  const updateChartData = (data) => {
-    let newPieData = [];
-    let newLineData = [];
-    let totalQuota = 0;
-    let totalTimes = 0;
-    let uniqueModels = new Set();
-    let totalTokens = 0;
+  const checkCardScrollable = (ref, setHintFunction) => {
+    if (ref.current) {
+      const element = ref.current;
+      const isScrollable = element.scrollHeight > element.clientHeight;
+      const isAtBottom = element.scrollTop + element.clientHeight >= element.scrollHeight - 5;
+      setHintFunction(isScrollable && !isAtBottom);
+    }
+  };
 
-    // 趋势数据处理
-    let timePoints = [];
-    let timeQuotaMap = new Map();
-    let timeTokensMap = new Map();
-    let timeCountMap = new Map();
+  const handleCardScroll = (ref, setHintFunction) => {
+    checkCardScrollable(ref, setHintFunction);
+  };
 
-    // 收集所有唯一的模型名称和时间点
+  // ========== Effects for scroll detection ==========
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      checkApiScrollable();
+      checkCardScrollable(announcementScrollRef, setShowAnnouncementScrollHint);
+      checkCardScrollable(faqScrollRef, setShowFaqScrollHint);
+
+      if (uptimeData.length === 1) {
+        checkCardScrollable(uptimeScrollRef, setShowUptimeScrollHint);
+      } else if (uptimeData.length > 1 && activeUptimeTab) {
+        const activeTabRef = uptimeTabScrollRefs.current[activeUptimeTab];
+        if (activeTabRef) {
+          checkCardScrollable(activeTabRef, setShowUptimeScrollHint);
+        }
+      }
+    }, 100);
+    return () => clearTimeout(timer);
+  }, [uptimeData, activeUptimeTab]);
+
+  const getUserData = async () => {
+    let res = await API.get(`/api/user/self`);
+    const { success, message, data } = res.data;
+    if (success) {
+      userDispatch({ type: 'login', payload: data });
+    } else {
+      showError(message);
+    }
+  };
+
+  // ========== Data Processing Functions ==========
+  const processRawData = useCallback((data) => {
+    const result = {
+      totalQuota: 0,
+      totalTimes: 0,
+      totalTokens: 0,
+      uniqueModels: new Set(),
+      timePoints: [],
+      timeQuotaMap: new Map(),
+      timeTokensMap: new Map(),
+      timeCountMap: new Map()
+    };
+
     data.forEach((item) => {
-      uniqueModels.add(item.model_name);
-      totalTokens += item.token_used;
-      totalQuota += item.quota;
-      totalTimes += item.count;
+      result.uniqueModels.add(item.model_name);
+      result.totalTokens += item.token_used;
+      result.totalQuota += item.quota;
+      result.totalTimes += item.count;
 
-      // 记录时间点
       const timeKey = timestamp2string1(item.created_at, dataExportDefaultTime);
-      if (!timePoints.includes(timeKey)) {
-        timePoints.push(timeKey);
+      if (!result.timePoints.includes(timeKey)) {
+        result.timePoints.push(timeKey);
       }
 
-      // 按时间点累加数据
-      if (!timeQuotaMap.has(timeKey)) {
-        timeQuotaMap.set(timeKey, 0);
-        timeTokensMap.set(timeKey, 0);
-        timeCountMap.set(timeKey, 0);
-      }
-      timeQuotaMap.set(timeKey, timeQuotaMap.get(timeKey) + item.quota);
-      timeTokensMap.set(timeKey, timeTokensMap.get(timeKey) + item.token_used);
-      timeCountMap.set(timeKey, timeCountMap.get(timeKey) + item.count);
+      initializeMaps(timeKey, result.timeQuotaMap, result.timeTokensMap, result.timeCountMap);
+      updateMapValue(result.timeQuotaMap, timeKey, item.quota);
+      updateMapValue(result.timeTokensMap, timeKey, item.token_used);
+      updateMapValue(result.timeCountMap, timeKey, item.count);
     });
 
-    // 确保时间点有序
-    timePoints.sort();
+    result.timePoints.sort();
+    return result;
+  }, [dataExportDefaultTime, initializeMaps, updateMapValue]);
 
-    // 生成趋势数据
+  const calculateTrendData = useCallback((timePoints, timeQuotaMap, timeTokensMap, timeCountMap) => {
     const quotaTrend = timePoints.map(time => timeQuotaMap.get(time) || 0);
     const tokensTrend = timePoints.map(time => timeTokensMap.get(time) || 0);
     const countTrend = timePoints.map(time => timeCountMap.get(time) || 0);
 
-    // 计算RPM和TPM趋势
     const rpmTrend = [];
     const tpmTrend = [];
 
     if (timePoints.length >= 2) {
-      const interval = dataExportDefaultTime === 'hour'
-        ? 60 // 分钟/小时
-        : dataExportDefaultTime === 'day'
-          ? 1440 // 分钟/天
-          : 10080; // 分钟/周
+      const interval = getTimeInterval(dataExportDefaultTime);
 
       for (let i = 0; i < timePoints.length; i++) {
         rpmTrend.push(timeCountMap.get(timePoints[i]) / interval);
@@ -386,23 +727,19 @@ const Detail = (props) => {
       }
     }
 
-    // 更新趋势数据状态
-    setTrendData({
-      // 账户数据不在API返回中，保持空数组
+    return {
       balance: [],
       usedQuota: [],
-      // 使用统计
-      requestCount: [], // 没有总请求次数趋势数据
+      requestCount: [],
       times: countTrend,
-      // 资源消耗
       consumeQuota: quotaTrend,
       tokens: tokensTrend,
-      // 性能指标
       rpm: rpmTrend,
       tpm: tpmTrend
-    });
+    };
+  }, [dataExportDefaultTime, getTimeInterval]);
 
-    // 处理颜色映射
+  const generateModelColors = useCallback((uniqueModels) => {
     const newModelColors = {};
     Array.from(uniqueModels).forEach((modelName) => {
       newModelColors[modelName] =
@@ -410,10 +747,12 @@ const Detail = (props) => {
         modelColors[modelName] ||
         modelToColor(modelName);
     });
-    setModelColors(newModelColors);
+    return newModelColors;
+  }, [modelColors]);
 
-    // 按时间和模型聚合数据
-    let aggregatedData = new Map();
+  const aggregateDataByTimeAndModel = useCallback((data) => {
+    const aggregatedData = new Map();
+
     data.forEach((item) => {
       const timeKey = timestamp2string1(item.created_at, dataExportDefaultTime);
       const modelKey = item.model_name;
@@ -433,41 +772,52 @@ const Detail = (props) => {
       existing.count += item.count;
     });
 
-    // 处理饼图数据
-    let modelTotals = new Map();
-    for (let [_, value] of aggregatedData) {
-      if (!modelTotals.has(value.model)) {
-        modelTotals.set(value.model, 0);
-      }
-      modelTotals.set(value.model, modelTotals.get(value.model) + value.count);
-    }
+    return aggregatedData;
+  }, [dataExportDefaultTime]);
 
-    newPieData = Array.from(modelTotals).map(([model, count]) => ({
-      type: model,
-      value: count,
-    }));
-
-    // 生成时间点序列
+  const generateChartTimePoints = useCallback((aggregatedData, data) => {
     let chartTimePoints = Array.from(
       new Set([...aggregatedData.values()].map((d) => d.time)),
     );
+
     if (chartTimePoints.length < 7) {
       const lastTime = Math.max(...data.map((item) => item.created_at));
-      const interval =
-        dataExportDefaultTime === 'hour'
-          ? 3600
-          : dataExportDefaultTime === 'day'
-            ? 86400
-            : 604800;
+      const interval = getTimeInterval(dataExportDefaultTime, true);
 
       chartTimePoints = Array.from({ length: 7 }, (_, i) =>
         timestamp2string1(lastTime - (6 - i) * interval, dataExportDefaultTime),
       );
     }
 
-    // 生成柱状图数据
+    return chartTimePoints;
+  }, [dataExportDefaultTime, getTimeInterval]);
+
+  const updateChartData = useCallback((data) => {
+    const processedData = processRawData(data);
+    const { totalQuota, totalTimes, totalTokens, uniqueModels, timePoints, timeQuotaMap, timeTokensMap, timeCountMap } = processedData;
+
+    const trendDataResult = calculateTrendData(timePoints, timeQuotaMap, timeTokensMap, timeCountMap);
+    setTrendData(trendDataResult);
+
+    const newModelColors = generateModelColors(uniqueModels);
+    setModelColors(newModelColors);
+
+    const aggregatedData = aggregateDataByTimeAndModel(data);
+
+    const modelTotals = new Map();
+    for (let [_, value] of aggregatedData) {
+      updateMapValue(modelTotals, value.model, value.count);
+    }
+
+    const newPieData = Array.from(modelTotals).map(([model, count]) => ({
+      type: model,
+      value: count,
+    })).sort((a, b) => b.value - a.value);
+
+    const chartTimePoints = generateChartTimePoints(aggregatedData, data);
+    let newLineData = [];
+
     chartTimePoints.forEach((time) => {
-      // 为每个时间点收集所有模型的数据
       let timeData = Array.from(uniqueModels).map((model) => {
         const key = `${time}-${model}`;
         const aggregated = aggregatedData.get(key);
@@ -479,68 +829,149 @@ const Detail = (props) => {
         };
       });
 
-      // 计算该时间点的总计
       const timeSum = timeData.reduce((sum, item) => sum + item.rawQuota, 0);
-
-      // 按照 rawQuota 从大到小排序
       timeData.sort((a, b) => b.rawQuota - a.rawQuota);
-
-      // 为每个数据点添加该时间的总计
-      timeData = timeData.map((item) => ({
-        ...item,
-        TimeSum: timeSum,
-      }));
-
-      // 将排序后的数据添加到 newLineData
+      timeData = timeData.map((item) => ({ ...item, TimeSum: timeSum }));
       newLineData.push(...timeData);
     });
 
-    // 排序
-    newPieData.sort((a, b) => b.value - a.value);
     newLineData.sort((a, b) => a.Time.localeCompare(b.Time));
 
-    // 更新图表配置和数据
-    setSpecPie((prev) => ({
-      ...prev,
-      data: [{ id: 'id0', values: newPieData }],
-      title: {
-        ...prev.title,
-        subtext: `${t('总计')}：${renderNumber(totalTimes)}`,
-      },
-      color: {
-        specified: newModelColors,
-      },
-    }));
+    updateChartSpec(
+      setSpecPie,
+      newPieData,
+      `${t('总计')}：${renderNumber(totalTimes)}`,
+      newModelColors,
+      'id0'
+    );
 
-    setSpecLine((prev) => ({
-      ...prev,
-      data: [{ id: 'barData', values: newLineData }],
-      title: {
-        ...prev.title,
-        subtext: `${t('总计')}：${renderQuota(totalQuota, 2)}`,
-      },
-      color: {
-        specified: newModelColors,
-      },
-    }));
+    updateChartSpec(
+      setSpecLine,
+      newLineData,
+      `${t('总计')}：${renderQuota(totalQuota, 2)}`,
+      newModelColors,
+      'barData'
+    );
 
     setPieData(newPieData);
     setLineData(newLineData);
     setConsumeQuota(totalQuota);
     setTimes(totalTimes);
     setConsumeTokens(totalTokens);
-  };
+  }, [
+    processRawData, calculateTrendData, generateModelColors, aggregateDataByTimeAndModel,
+    generateChartTimePoints, updateChartSpec, updateMapValue, t
+  ]);
 
-  const getUserData = async () => {
-    let res = await API.get(`/api/user/self`);
-    const { success, message, data } = res.data;
-    if (success) {
-      userDispatch({ type: 'login', payload: data });
-    } else {
-      showError(message);
+  // ========== Status Data Management ==========
+  const announcementLegendData = useMemo(() => [
+    { color: 'grey', label: t('默认'), type: 'default' },
+    { color: 'blue', label: t('进行中'), type: 'ongoing' },
+    { color: 'green', label: t('成功'), type: 'success' },
+    { color: 'orange', label: t('警告'), type: 'warning' },
+    { color: 'red', label: t('异常'), type: 'error' }
+  ], [t]);
+
+  const uptimeStatusMap = useMemo(() => ({
+    1: { color: '#10b981', label: t('正常'), text: t('可用率') },   // UP
+    0: { color: '#ef4444', label: t('异常'), text: t('有异常') },   // DOWN
+    2: { color: '#f59e0b', label: t('高延迟'), text: t('高延迟') }, // PENDING
+    3: { color: '#3b82f6', label: t('维护中'), text: t('维护中') }   // MAINTENANCE
+  }), [t]);
+
+  const uptimeLegendData = useMemo(() =>
+    Object.entries(uptimeStatusMap).map(([status, info]) => ({
+      status: Number(status),
+      color: info.color,
+      label: info.label
+    })), [uptimeStatusMap]);
+
+  const getUptimeStatusColor = useCallback((status) =>
+    uptimeStatusMap[status]?.color || '#8b9aa7',
+    [uptimeStatusMap]);
+
+  const getUptimeStatusText = useCallback((status) =>
+    uptimeStatusMap[status]?.text || t('未知'),
+    [uptimeStatusMap, t]);
+
+  const apiInfoData = useMemo(() => {
+    return statusState?.status?.api_info || [];
+  }, [statusState?.status?.api_info]);
+
+  const announcementData = useMemo(() => {
+    const announcements = statusState?.status?.announcements || [];
+    return announcements.map(item => ({
+      ...item,
+      time: getRelativeTime(item.publishDate)
+    }));
+  }, [statusState?.status?.announcements]);
+
+  const faqData = useMemo(() => {
+    return statusState?.status?.faq || [];
+  }, [statusState?.status?.faq]);
+
+  const renderMonitorList = useCallback((monitors) => {
+    if (!monitors || monitors.length === 0) {
+      return (
+        <div className="flex justify-center items-center py-4">
+          <Empty
+            image={<IllustrationConstruction style={ILLUSTRATION_SIZE} />}
+            darkModeImage={<IllustrationConstructionDark style={ILLUSTRATION_SIZE} />}
+            title={t('暂无监控数据')}
+          />
+        </div>
+      );
     }
-  };
 
+    const grouped = {};
+    monitors.forEach((m) => {
+      const g = m.group || '';
+      if (!grouped[g]) grouped[g] = [];
+      grouped[g].push(m);
+    });
+
+    const renderItem = (monitor, idx) => (
+      <div key={idx} className="p-2 hover:bg-white rounded-lg transition-colors">
+        <div className="flex items-center justify-between mb-1">
+          <div className="flex items-center gap-2">
+            <div
+              className="w-2 h-2 rounded-full flex-shrink-0"
+              style={{ backgroundColor: getUptimeStatusColor(monitor.status) }}
+            />
+            <span className="text-sm font-medium text-gray-900">{monitor.name}</span>
+          </div>
+          <span className="text-xs text-gray-500">{((monitor.uptime || 0) * 100).toFixed(2)}%</span>
+        </div>
+        <div className="flex items-center gap-2">
+          <span className="text-xs text-gray-500">{getUptimeStatusText(monitor.status)}</span>
+          <div className="flex-1">
+            <Progress
+              percent={(monitor.uptime || 0) * 100}
+              showInfo={false}
+              aria-label={`${monitor.name} uptime`}
+              stroke={getUptimeStatusColor(monitor.status)}
+            />
+          </div>
+        </div>
+      </div>
+    );
+
+    return Object.entries(grouped).map(([gname, list]) => (
+      <div key={gname || 'default'} className="mb-2">
+        {gname && (
+          <>
+            <div className="text-md font-semibold text-gray-500 px-2 py-1">
+              {gname}
+            </div>
+            <Divider />
+          </>
+        )}
+        {list.map(renderItem)}
+      </div>
+    ));
+  }, [t, getUptimeStatusColor, getUptimeStatusText]);
+
+  // ========== Hooks - Effects ==========
   useEffect(() => {
     getUserData();
     if (!initialized.current) {
@@ -552,140 +983,21 @@ const Detail = (props) => {
     }
   }, []);
 
-  // 数据卡片信息
-  const groupedStatsData = [
-    {
-      title: t('账户数据'),
-      color: 'bg-blue-50',
-      items: [
-        {
-          title: t('当前余额'),
-          value: renderQuota(userState?.user?.quota),
-          icon: <IconMoneyExchangeStroked size="large" />,
-          avatarColor: 'blue',
-          onClick: () => navigate('/console/topup'),
-          trendData: [], // 当前余额没有趋势数据
-          trendColor: '#3b82f6'
-        },
-        {
-          title: t('历史消耗'),
-          value: renderQuota(userState?.user?.used_quota),
-          icon: <IconHistogram size="large" />,
-          avatarColor: 'purple',
-          trendData: [], // 历史消耗没有趋势数据
-          trendColor: '#8b5cf6'
-        }
-      ]
-    },
-    {
-      title: t('使用统计'),
-      color: 'bg-green-50',
-      items: [
-        {
-          title: t('请求次数'),
-          value: userState.user?.request_count,
-          icon: <IconRotate size="large" />,
-          avatarColor: 'green',
-          trendData: [], // 请求次数没有趋势数据
-          trendColor: '#10b981'
-        },
-        {
-          title: t('统计次数'),
-          value: times,
-          icon: <IconPulse size="large" />,
-          avatarColor: 'cyan',
-          trendData: trendData.times,
-          trendColor: '#06b6d4'
-        }
-      ]
-    },
-    {
-      title: t('资源消耗'),
-      color: 'bg-yellow-50',
-      items: [
-        {
-          title: t('统计额度'),
-          value: renderQuota(consumeQuota),
-          icon: <IconCoinMoneyStroked size="large" />,
-          avatarColor: 'yellow',
-          trendData: trendData.consumeQuota,
-          trendColor: '#f59e0b'
-        },
-        {
-          title: t('统计Tokens'),
-          value: isNaN(consumeTokens) ? 0 : consumeTokens,
-          icon: <IconTextStroked size="large" />,
-          avatarColor: 'pink',
-          trendData: trendData.tokens,
-          trendColor: '#ec4899'
-        }
-      ]
-    },
-    {
-      title: t('性能指标'),
-      color: 'bg-indigo-50',
-      items: [
-        {
-          title: t('平均RPM'),
-          value: (
-            times /
-            ((Date.parse(end_timestamp) - Date.parse(start_timestamp)) / 60000)
-          ).toFixed(3),
-          icon: <IconStopwatchStroked size="large" />,
-          avatarColor: 'indigo',
-          trendData: trendData.rpm,
-          trendColor: '#6366f1'
-        },
-        {
-          title: t('平均TPM'),
-          value: (() => {
-            const tpm = consumeTokens /
-              ((Date.parse(end_timestamp) - Date.parse(start_timestamp)) / 60000);
-            return isNaN(tpm) ? '0' : tpm.toFixed(3);
-          })(),
-          icon: <IconTypograph size="large" />,
-          avatarColor: 'orange',
-          trendData: trendData.tpm,
-          trendColor: '#f97316'
-        }
-      ]
-    }
-  ];
-
-  // 获取问候语
-  const getGreeting = () => {
-    const hours = new Date().getHours();
-    let greeting = '';
-
-    if (hours >= 5 && hours < 12) {
-      greeting = t('早上好');
-    } else if (hours >= 12 && hours < 14) {
-      greeting = t('中午好');
-    } else if (hours >= 14 && hours < 18) {
-      greeting = t('下午好');
-    } else {
-      greeting = t('晚上好');
-    }
-
-    const username = userState?.user?.username || '';
-    return `👋${greeting}，${username}`;
-  };
-
   return (
-    <div className="bg-gray-50 h-full">
+    <div className="bg-gray-50 h-full mt-[64px]">
       <div className="flex items-center justify-between mb-4">
-        <h2 className="text-2xl font-semibold text-gray-800">{getGreeting()}</h2>
+        <h2 className="text-2xl font-semibold text-gray-800">{getGreeting}</h2>
         <div className="flex gap-3">
           <IconButton
             icon={<IconSearch />}
             onClick={showSearchModal}
-            className="bg-green-500 text-white hover:bg-green-600 !rounded-full"
+            className={`bg-green-500 hover:bg-green-600 ${ICON_BUTTON_CLASS}`}
           />
           <IconButton
             icon={<IconRefresh />}
             onClick={refresh}
             loading={loading}
-            className="bg-blue-500 text-white hover:bg-blue-600 !rounded-full"
+            className={`bg-blue-500 hover:bg-blue-600 ${ICON_BUTTON_CLASS}`}
           />
         </div>
       </div>
@@ -701,55 +1013,44 @@ const Detail = (props) => {
         centered
       >
         <Form ref={formRef} layout='vertical' className="w-full">
-          <Form.DatePicker
-            field='start_timestamp'
-            label={t('起始时间')}
-            className="w-full mb-2 !rounded-lg"
-            initValue={start_timestamp}
-            value={start_timestamp}
-            type='dateTime'
-            name='start_timestamp'
-            size='large'
-            onChange={(value) => handleInputChange(value, 'start_timestamp')}
-          />
-          <Form.DatePicker
-            field='end_timestamp'
-            label={t('结束时间')}
-            className="w-full mb-2 !rounded-lg"
-            initValue={end_timestamp}
-            value={end_timestamp}
-            type='dateTime'
-            name='end_timestamp'
-            size='large'
-            onChange={(value) => handleInputChange(value, 'end_timestamp')}
-          />
-          <Form.Select
-            field='data_export_default_time'
-            label={t('时间粒度')}
-            className="w-full mb-2 !rounded-lg"
-            initValue={dataExportDefaultTime}
-            placeholder={t('时间粒度')}
-            name='data_export_default_time'
-            size='large'
-            optionList={[
-              { label: t('小时'), value: 'hour' },
-              { label: t('天'), value: 'day' },
-              { label: t('周'), value: 'week' },
-            ]}
-            onChange={(value) => handleInputChange(value, 'data_export_default_time')}
-          />
-          {isAdminUser && (
-            <Form.Input
-              field='username'
-              label={t('用户名称')}
-              className="w-full mb-2 !rounded-lg"
-              value={username}
-              placeholder={t('可选值')}
-              name='username'
-              size='large'
-              onChange={(value) => handleInputChange(value, 'username')}
-            />
-          )}
+          {createFormField(Form.DatePicker, {
+            field: 'start_timestamp',
+            label: t('起始时间'),
+            initValue: start_timestamp,
+            value: start_timestamp,
+            type: 'dateTime',
+            name: 'start_timestamp',
+            onChange: (value) => handleInputChange(value, 'start_timestamp')
+          })}
+
+          {createFormField(Form.DatePicker, {
+            field: 'end_timestamp',
+            label: t('结束时间'),
+            initValue: end_timestamp,
+            value: end_timestamp,
+            type: 'dateTime',
+            name: 'end_timestamp',
+            onChange: (value) => handleInputChange(value, 'end_timestamp')
+          })}
+
+          {createFormField(Form.Select, {
+            field: 'data_export_default_time',
+            label: t('时间粒度'),
+            initValue: dataExportDefaultTime,
+            placeholder: t('时间粒度'),
+            name: 'data_export_default_time',
+            optionList: timeOptions,
+            onChange: (value) => handleInputChange(value, 'data_export_default_time')
+          })}
+
+          {isAdminUser && createFormField(Form.Input, {
+            field: 'username',
+            label: t('用户名称'),
+            value: username,
+            placeholder: t('可选值'),
+            name: 'username',
+            onChange: (value) => handleInputChange(value, 'username')
+          })}
         </Form>
       </Modal>
 
@@ -759,23 +1060,9 @@ const Detail = (props) => {
             {groupedStatsData.map((group, idx) => (
               <Card
                 key={idx}
-                shadows='always'
-                bordered={false}
+                {...CARD_PROPS}
                 className={`${group.color} border-0 !rounded-2xl w-full`}
-                headerLine={true}
-                header={<div style={{ color: 'white', fontWeight: 'bold', fontSize: '16px' }}>{group.title}</div>}
-                headerStyle={{
-                  background: idx === 0
-                    ? 'linear-gradient(135deg, #3b82f6 0%, #60a5fa 100%)'
-                    : idx === 1
-                      ? 'linear-gradient(135deg, #10b981 0%, #34d399 100%)'
-                      : idx === 2
-                        ? 'linear-gradient(135deg, #f59e0b 0%, #fbbf24 100%)'
-                        : 'linear-gradient(135deg, #ec4899 0%, #f472b6 100%)',
-                  borderTopLeftRadius: '16px',
-                  borderTopRightRadius: '16px',
-                  padding: '12px 16px',
-                }}
+                title={group.title}
               >
                 <div className="space-y-4">
                   {group.items.map((item, itemIdx) => (
@@ -801,7 +1088,7 @@ const Detail = (props) => {
                         <div className="w-24 h-10">
                           <VChart
                             spec={getTrendSpec(item.trendData, item.trendColor)}
-                            option={{ mode: 'desktop-browser' }}
+                            option={CHART_CONFIG}
                           />
                         </div>
                       )}
@@ -813,30 +1100,395 @@ const Detail = (props) => {
           </div>
         </div>
 
-        <div className="grid grid-cols-1 lg:grid-cols-1 gap-6 mb-6">
-          <Card
-            shadows='always'
-            bordered={false}
-            className="shadow-sm !rounded-2xl"
-            headerLine={true}
-            title={t('模型数据分析')}
-          >
-            <div className="grid grid-cols-1 xl:grid-cols-2 gap-6">
+        <div className="mb-4">
+          <div className={`grid grid-cols-1 gap-4 ${hasApiInfoPanel ? 'lg:grid-cols-4' : ''}`}>
+            <Card
+              {...CARD_PROPS}
+              className={`shadow-sm !rounded-2xl ${hasApiInfoPanel ? 'lg:col-span-3' : ''}`}
+              title={
+                <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between w-full gap-3">
+                  <div className={FLEX_CENTER_GAP2}>
+                    <PieChart size={16} />
+                    {t('模型数据分析')}
+                  </div>
+                  <Tabs
+                    type="button"
+                    activeKey={activeChartTab}
+                    onChange={setActiveChartTab}
+                  >
+                    <TabPane tab={
+                      <span>
+                        <IconHistogram />
+                        {t('消耗分布')}
+                      </span>
+                    } itemKey="1" />
+                    <TabPane tab={
+                      <span>
+                        <IconPieChart2Stroked />
+                        {t('调用次数分布')}
+                      </span>
+                    } itemKey="2" />
+                  </Tabs>
+                </div>
+              }
+            >
               <div style={{ height: 400 }}>
-                <VChart
-                  spec={spec_line}
-                  option={{ mode: 'desktop-browser' }}
-                />
+                {activeChartTab === '1' ? (
+                  <VChart
+                    spec={spec_line}
+                    option={CHART_CONFIG}
+                  />
+                ) : (
+                  <VChart
+                    spec={spec_pie}
+                    option={CHART_CONFIG}
+                  />
+                )}
               </div>
-              <div style={{ height: 400 }}>
-                <VChart
-                  spec={spec_pie}
-                  option={{ mode: 'desktop-browser' }}
-                />
-              </div>
-            </div>
-          </Card>
+            </Card>
+
+            {hasApiInfoPanel && (
+              <Card
+                {...CARD_PROPS}
+                className="bg-gray-50 border-0 !rounded-2xl"
+                title={
+                  <div className={FLEX_CENTER_GAP2}>
+                    <Server size={16} />
+                    {t('API信息')}
+                  </div>
+                }
+              >
+                <div className="card-content-container">
+                  <div
+                    ref={apiScrollRef}
+                    className="space-y-3 max-h-96 overflow-y-auto card-content-scroll"
+                    onScroll={handleApiScroll}
+                  >
+                    {apiInfoData.length > 0 ? (
+                      apiInfoData.map((api) => (
+                        <div key={api.id} className="flex p-2 hover:bg-white rounded-lg transition-colors cursor-pointer">
+                          <div className="flex-shrink-0 mr-3">
+                            <Avatar
+                              size="extra-small"
+                              color={api.color}
+                            >
+                              {api.route.substring(0, 2)}
+                            </Avatar>
+                          </div>
+                          <div className="flex-1">
+                            <div className="text-sm font-medium text-gray-900 mb-1 !font-bold flex items-center gap-2">
+                              <Tag
+                                prefixIcon={<Gauge size={12} />}
+                                size="small"
+                                color="white"
+                                shape='circle'
+                                onClick={() => handleSpeedTest(api.url)}
+                                className="cursor-pointer hover:opacity-80 text-xs"
+                              >
+                                {t('测速')}
+                              </Tag>
+                              {api.route}
+                            </div>
+                            <div
+                              className="!text-semi-color-primary break-all cursor-pointer hover:underline mb-1"
+                              onClick={() => handleCopyUrl(api.url)}
+                            >
+                              {api.url}
+                            </div>
+                            <div className="text-gray-500">
+                              {api.description}
+                            </div>
+                          </div>
+                        </div>
+                      ))
+                    ) : (
+                      <div className="flex justify-center items-center py-8">
+                        <Empty
+                          image={<IllustrationConstruction style={ILLUSTRATION_SIZE} />}
+                          darkModeImage={<IllustrationConstructionDark style={ILLUSTRATION_SIZE} />}
+                          title={t('暂无API信息')}
+                          description={t('请联系管理员在系统设置中配置API信息')}
+                        />
+                      </div>
+                    )}
+                  </div>
+                  <div
+                    className="card-content-fade-indicator"
+                    style={{ opacity: showApiScrollHint ? 1 : 0 }}
+                  />
+                </div>
+              </Card>
+            )}
+          </div>
         </div>
+
+        {/* 系统公告和常见问答卡片 */}
+        {hasInfoPanels && (
+          <div className="mb-4">
+            <div className="grid grid-cols-1 lg:grid-cols-4 gap-4">
+              {/* 公告卡片 */}
+              {announcementsEnabled && (
+                <Card
+                  {...CARD_PROPS}
+                  className="shadow-sm !rounded-2xl lg:col-span-2"
+                  title={
+                    <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-2 w-full">
+                      <div className="flex items-center gap-2">
+                        <Bell size={16} />
+                        {t('系统公告')}
+                        <Tag size="small" color="grey" shape="circle">
+                          {t('显示最新20条')}
+                        </Tag>
+                      </div>
+                      {/* 图例 */}
+                      <div className="flex flex-wrap gap-3 text-xs">
+                        {announcementLegendData.map((legend, index) => (
+                          <div key={index} className="flex items-center gap-1">
+                            <div
+                              className="w-2 h-2 rounded-full"
+                              style={{
+                                backgroundColor: legend.color === 'grey' ? '#8b9aa7' :
+                                  legend.color === 'blue' ? '#3b82f6' :
+                                    legend.color === 'green' ? '#10b981' :
+                                      legend.color === 'orange' ? '#f59e0b' :
+                                        legend.color === 'red' ? '#ef4444' : '#8b9aa7'
+                              }}
+                            />
+                            <span className="text-gray-600">{legend.label}</span>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  }
+                >
+                  <div className="card-content-container">
+                    <div
+                      ref={announcementScrollRef}
+                      className="p-2 max-h-96 overflow-y-auto card-content-scroll"
+                      onScroll={() => handleCardScroll(announcementScrollRef, setShowAnnouncementScrollHint)}
+                    >
+                      {announcementData.length > 0 ? (
+                        <Timeline mode="alternate">
+                          {announcementData.map((item, idx) => (
+                            <Timeline.Item
+                              key={idx}
+                              type={item.type || 'default'}
+                              time={item.time}
+                            >
+                              <div>
+                                <div
+                                  dangerouslySetInnerHTML={{ __html: marked.parse(item.content || '') }}
+                                />
+                                {item.extra && (
+                                  <div
+                                    className="text-xs text-gray-500"
+                                    dangerouslySetInnerHTML={{ __html: marked.parse(item.extra) }}
+                                  />
+                                )}
+                              </div>
+                            </Timeline.Item>
+                          ))}
+                        </Timeline>
+                      ) : (
+                        <div className="flex justify-center items-center py-8">
+                          <Empty
+                            image={<IllustrationConstruction style={ILLUSTRATION_SIZE} />}
+                            darkModeImage={<IllustrationConstructionDark style={ILLUSTRATION_SIZE} />}
+                            title={t('暂无系统公告')}
+                            description={t('请联系管理员在系统设置中配置公告信息')}
+                          />
+                        </div>
+                      )}
+                    </div>
+                    <div
+                      className="card-content-fade-indicator"
+                      style={{ opacity: showAnnouncementScrollHint ? 1 : 0 }}
+                    />
+                  </div>
+                </Card>
+              )}
+
+              {/* 常见问答卡片 */}
+              {faqEnabled && (
+                <Card
+                  {...CARD_PROPS}
+                  className="shadow-sm !rounded-2xl lg:col-span-1"
+                  title={
+                    <div className={FLEX_CENTER_GAP2}>
+                      <HelpCircle size={16} />
+                      {t('常见问答')}
+                    </div>
+                  }
+                  bodyStyle={{ padding: 0 }}
+                >
+                  <div className="card-content-container">
+                    <div
+                      ref={faqScrollRef}
+                      className="p-2 max-h-96 overflow-y-auto card-content-scroll"
+                      onScroll={() => handleCardScroll(faqScrollRef, setShowFaqScrollHint)}
+                    >
+                      {faqData.length > 0 ? (
+                        <Collapse
+                          accordion
+                          expandIcon={<IconPlus />}
+                          collapseIcon={<IconMinus />}
+                        >
+                          {faqData.map((item, index) => (
+                            <Collapse.Panel
+                              key={index}
+                              header={item.question}
+                              itemKey={index.toString()}
+                            >
+                              <div
+                                dangerouslySetInnerHTML={{ __html: marked.parse(item.answer || '') }}
+                              />
+                            </Collapse.Panel>
+                          ))}
+                        </Collapse>
+                      ) : (
+                        <div className="flex justify-center items-center py-8">
+                          <Empty
+                            image={<IllustrationConstruction style={ILLUSTRATION_SIZE} />}
+                            darkModeImage={<IllustrationConstructionDark style={ILLUSTRATION_SIZE} />}
+                            title={t('暂无常见问答')}
+                            description={t('请联系管理员在系统设置中配置常见问答')}
+                          />
+                        </div>
+                      )}
+                    </div>
+                    <div
+                      className="card-content-fade-indicator"
+                      style={{ opacity: showFaqScrollHint ? 1 : 0 }}
+                    />
+                  </div>
+                </Card>
+              )}
+
+              {/* 服务可用性卡片 */}
+              {uptimeEnabled && (
+                <Card
+                  {...CARD_PROPS}
+                  className="shadow-sm !rounded-2xl lg:col-span-1 flex flex-col"
+                  title={
+                    <div className="flex items-center justify-between w-full gap-2">
+                      <div className="flex items-center gap-2">
+                        <Gauge size={16} />
+                        {t('服务可用性')}
+                      </div>
+                      <IconButton
+                        icon={<IconRefresh />}
+                        onClick={loadUptimeData}
+                        loading={uptimeLoading}
+                        size="small"
+                        theme="borderless"
+                        className="text-gray-500 hover:text-blue-500 hover:bg-blue-50 !rounded-full"
+                      />
+                    </div>
+                  }
+                  bodyStyle={{ padding: 0 }}
+                >
+                  {/* 内容区域 */}
+                  <div className="flex-1 relative">
+                    <Spin spinning={uptimeLoading}>
+                      {uptimeData.length > 0 ? (
+                        uptimeData.length === 1 ? (
+                          <div className="card-content-container">
+                            <div
+                              ref={uptimeScrollRef}
+                              className="p-2 max-h-[24rem] overflow-y-auto card-content-scroll"
+                              onScroll={() => handleCardScroll(uptimeScrollRef, setShowUptimeScrollHint)}
+                            >
+                              {renderMonitorList(uptimeData[0].monitors)}
+                            </div>
+                            <div
+                              className="card-content-fade-indicator"
+                              style={{ opacity: showUptimeScrollHint ? 1 : 0 }}
+                            />
+                          </div>
+                        ) : (
+                          <Tabs
+                            type="card"
+                            collapsible
+                            activeKey={activeUptimeTab}
+                            onChange={setActiveUptimeTab}
+                            size="small"
+                          >
+                            {uptimeData.map((group, groupIdx) => {
+                              if (!uptimeTabScrollRefs.current[group.categoryName]) {
+                                uptimeTabScrollRefs.current[group.categoryName] = React.createRef();
+                              }
+                              const tabScrollRef = uptimeTabScrollRefs.current[group.categoryName];
+
+                              return (
+                                <TabPane
+                                  tab={
+                                    <span className="flex items-center gap-2">
+                                      <Gauge size={14} />
+                                      {group.categoryName}
+                                      <Tag
+                                        color={activeUptimeTab === group.categoryName ? 'red' : 'grey'}
+                                        size='small'
+                                        shape='circle'
+                                      >
+                                        {group.monitors ? group.monitors.length : 0}
+                                      </Tag>
+                                    </span>
+                                  }
+                                  itemKey={group.categoryName}
+                                  key={groupIdx}
+                                >
+                                  <div className="card-content-container">
+                                    <div
+                                      ref={tabScrollRef}
+                                      className="p-2 max-h-[21.5rem] overflow-y-auto card-content-scroll"
+                                      onScroll={() => handleCardScroll(tabScrollRef, setShowUptimeScrollHint)}
+                                    >
+                                      {renderMonitorList(group.monitors)}
+                                    </div>
+                                    <div
+                                      className="card-content-fade-indicator"
+                                      style={{ opacity: activeUptimeTab === group.categoryName ? showUptimeScrollHint ? 1 : 0 : 0 }}
+                                    />
+                                  </div>
+                                </TabPane>
+                              );
+                            })}
+                          </Tabs>
+                        )
+                      ) : (
+                        <div className="flex justify-center items-center py-8">
+                          <Empty
+                            image={<IllustrationConstruction style={ILLUSTRATION_SIZE} />}
+                            darkModeImage={<IllustrationConstructionDark style={ILLUSTRATION_SIZE} />}
+                            title={t('暂无监控数据')}
+                            description={t('请联系管理员在系统设置中配置Uptime')}
+                          />
+                        </div>
+                      )}
+                    </Spin>
+                  </div>
+
+                  {/* 固定在底部的图例 */}
+                  {uptimeData.length > 0 && (
+                    <div className="p-3 mt-auto bg-gray-50 rounded-b-2xl">
+                      <div className="flex flex-wrap gap-3 text-xs justify-center">
+                        {uptimeLegendData.map((legend, index) => (
+                          <div key={index} className="flex items-center gap-1">
+                            <div
+                              className="w-2 h-2 rounded-full"
+                              style={{ backgroundColor: legend.color }}
+                            />
+                            <span className="text-gray-600">{legend.label}</span>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                </Card>
+              )}
+            </div>
+          </div>
+        )}
       </Spin>
     </div>
   );

@@ -33,9 +33,9 @@ import WeChatIcon from '../common/logo/WeChatIcon.js';
 import TelegramLoginButton from 'react-telegram-login/src';
 import { UserContext } from '../../context/User/index.js';
 import { useTranslation } from 'react-i18next';
-import Background from '/example.png';
 
 const RegisterForm = () => {
+  let navigate = useNavigate();
   const { t } = useTranslation();
   const [inputs, setInputs] = useState({
     username: '',
@@ -46,15 +46,12 @@ const RegisterForm = () => {
     wechat_verification_code: '',
   });
   const { username, password, password2 } = inputs;
-  const [showEmailVerification, setShowEmailVerification] = useState(false);
   const [userState, userDispatch] = useContext(UserContext);
   const [turnstileEnabled, setTurnstileEnabled] = useState(false);
   const [turnstileSiteKey, setTurnstileSiteKey] = useState('');
   const [turnstileToken, setTurnstileToken] = useState('');
-  const [loading, setLoading] = useState(false);
   const [showWeChatLoginModal, setShowWeChatLoginModal] = useState(false);
   const [showEmailRegister, setShowEmailRegister] = useState(false);
-  const [status, setStatus] = useState({});
   const [wechatLoading, setWechatLoading] = useState(false);
   const [githubLoading, setGithubLoading] = useState(false);
   const [oidcLoading, setOidcLoading] = useState(false);
@@ -64,7 +61,6 @@ const RegisterForm = () => {
   const [verificationCodeLoading, setVerificationCodeLoading] = useState(false);
   const [otherRegisterOptionsLoading, setOtherRegisterOptionsLoading] = useState(false);
   const [wechatCodeSubmitLoading, setWechatCodeSubmitLoading] = useState(false);
-  let navigate = useNavigate();
 
   const logo = getLogo();
   const systemName = getSystemName();
@@ -74,18 +70,22 @@ const RegisterForm = () => {
     localStorage.setItem('aff', affCode);
   }
 
+  const [status] = useState(() => {
+    const savedStatus = localStorage.getItem('status');
+    return savedStatus ? JSON.parse(savedStatus) : {};
+  });
+
+  const [showEmailVerification, setShowEmailVerification] = useState(() => {
+    return status.email_verification ?? false;
+  });
+
   useEffect(() => {
-    let status = localStorage.getItem('status');
-    if (status) {
-      status = JSON.parse(status);
-      setStatus(status);
-      setShowEmailVerification(status.email_verification);
-      if (status.turnstile_check) {
-        setTurnstileEnabled(true);
-        setTurnstileSiteKey(status.turnstile_site_key);
-      }
+    setShowEmailVerification(status.email_verification);
+    if (status.turnstile_check) {
+      setTurnstileEnabled(true);
+      setTurnstileSiteKey(status.turnstile_site_key);
     }
-  }, []);
+  }, [status]);
 
   const onWeChatLoginClicked = () => {
     setWechatLoading(true);
@@ -272,7 +272,7 @@ const RegisterForm = () => {
         <div className="w-full max-w-md">
           <div className="flex items-center justify-center mb-6 gap-2">
             <img src={logo} alt="Logo" className="h-10 rounded-full" />
-            <Title heading={3} className='!text-white'>{systemName}</Title>
+            <Title heading={3} className='!text-gray-800'>{systemName}</Title>
           </div>
 
           <Card className="shadow-xl border-0 !rounded-2xl overflow-hidden">
@@ -379,7 +379,7 @@ const RegisterForm = () => {
         <div className="w-full max-w-md">
           <div className="flex items-center justify-center mb-6 gap-2">
             <img src={logo} alt="Logo" className="h-10 rounded-full" />
-            <Title heading={3} className='!text-white'>{systemName}</Title>
+            <Title heading={3} className='!text-gray-800'>{systemName}</Title>
           </div>
 
           <Card className="shadow-xl border-0 !rounded-2xl overflow-hidden">
@@ -394,7 +394,6 @@ const RegisterForm = () => {
                   placeholder={t('请输入用户名')}
                   name="username"
                   size="large"
-                  className="!rounded-md"
                   onChange={(value) => handleChange('username', value)}
                   prefix={<IconUser />}
                 />
@@ -406,7 +405,6 @@ const RegisterForm = () => {
                   name="password"
                   mode="password"
                   size="large"
-                  className="!rounded-md"
                   onChange={(value) => handleChange('password', value)}
                   prefix={<IconLock />}
                 />
@@ -418,7 +416,6 @@ const RegisterForm = () => {
                   name="password2"
                   mode="password"
                   size="large"
-                  className="!rounded-md"
                   onChange={(value) => handleChange('password2', value)}
                   prefix={<IconLock />}
                 />
@@ -432,7 +429,6 @@ const RegisterForm = () => {
                       name="email"
                       type="email"
                       size="large"
-                      className="!rounded-md"
                       onChange={(value) => handleChange('email', value)}
                       prefix={<IconMail />}
                       suffix={
@@ -440,7 +436,6 @@ const RegisterForm = () => {
                           onClick={sendVerificationCode}
                           loading={verificationCodeLoading}
                           size="small"
-                          className="!rounded-md mr-2"
                         >
                           {t('获取验证码')}
                         </Button>
@@ -452,7 +447,6 @@ const RegisterForm = () => {
                       placeholder={t('输入验证码')}
                       name="verification_code"
                       size="large"
-                      className="!rounded-md"
                       onChange={(value) => handleChange('verification_code', value)}
                       prefix={<IconKey />}
                     />
@@ -542,17 +536,11 @@ const RegisterForm = () => {
   };
 
   return (
-    <div className="min-h-screen relative flex items-center justify-center py-12 px-4 sm:px-6 lg:px-8 overflow-hidden">
-      <div
-        className="absolute inset-0 z-0 bg-cover bg-center scale-125 opacity-100"
-        style={{
-          backgroundImage: `url(${Background})`
-        }}
-      ></div>
-
-      <div className="absolute inset-0 bg-gradient-to-br from-teal-500/30 via-blue-500/30 to-purple-500/30 backdrop-blur-sm z-0"></div>
-
-      <div className="w-full max-w-sm relative z-10">
+    <div className="relative overflow-hidden bg-gray-100 flex items-center justify-center py-12 px-4 sm:px-6 lg:px-8">
+      {/* 背景模糊晕染球 */}
+      <div className="blur-ball blur-ball-indigo" style={{ top: '-80px', right: '-80px', transform: 'none' }} />
+      <div className="blur-ball blur-ball-teal" style={{ top: '50%', left: '-120px' }} />
+      <div className="w-full max-w-sm mt-[64px]">
         {showEmailRegister || !(status.github_oauth || status.oidc_enabled || status.wechat_login || status.linuxdo_oauth || status.telegram_oauth)
           ? renderEmailRegisterForm()
           : renderOAuthOptions()}

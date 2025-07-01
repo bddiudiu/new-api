@@ -19,6 +19,7 @@ import {
   TextArea,
   Card,
   Tag,
+  Avatar,
 } from '@douyinfe/semi-ui';
 import {
   IconSave,
@@ -229,7 +230,7 @@ const EditTagModal = (props) => {
 
     let localModels = [...inputs.models];
     let localModelOptions = [...modelOptions];
-    let hasError = false;
+    const addedModels = [];
 
     modelArray.forEach((model) => {
       // 检查模型是否已存在，且模型名称非空
@@ -241,18 +242,25 @@ const EditTagModal = (props) => {
           text: model,
           value: model,
         });
-      } else if (model) {
-        showError('某些模型已存在！');
-        hasError = true;
+        addedModels.push(model);
       }
     });
-
-    if (hasError) return; // 如果有错误则终止操作
 
     // 更新状态值
     setModelOptions(localModelOptions);
     setCustomModel('');
     handleInputChange('models', localModels);
+
+    if (addedModels.length > 0) {
+      showSuccess(
+        t('已新增 {{count}} 个模型：{{list}}', {
+          count: addedModels.length,
+          list: addedModels.join(', '),
+        })
+      );
+    } else {
+      showInfo(t('未发现新增模型'));
+    }
   };
 
   return (
@@ -266,14 +274,7 @@ const EditTagModal = (props) => {
           </Title>
         </Space>
       }
-      headerStyle={{
-        borderBottom: '1px solid var(--semi-color-border)',
-        padding: '24px'
-      }}
-      bodyStyle={{
-        backgroundColor: 'var(--semi-color-bg-0)',
-        padding: '0'
-      }}
+      bodyStyle={{ padding: '0' }}
       visible={visible}
       width={600}
       onCancel={handleClose}
@@ -282,8 +283,6 @@ const EditTagModal = (props) => {
           <Space>
             <Button
               theme="solid"
-              size="large"
-              className="!rounded-full"
               onClick={handleSave}
               loading={loading}
               icon={<IconSave />}
@@ -292,8 +291,6 @@ const EditTagModal = (props) => {
             </Button>
             <Button
               theme="light"
-              size="large"
-              className="!rounded-full"
               type="primary"
               onClick={handleClose}
               icon={<IconClose />}
@@ -306,22 +303,16 @@ const EditTagModal = (props) => {
       closeIcon={null}
     >
       <Spin spinning={loading}>
-        <div className="p-6">
+        <div className="p-2">
           <Card className="!rounded-2xl shadow-sm border-0 mb-6">
-            <div className="flex items-center mb-4 p-6 rounded-xl" style={{
-              background: 'linear-gradient(135deg, #1e3a8a 0%, #2563eb 50%, #3b82f6 100%)',
-              position: 'relative'
-            }}>
-              <div className="absolute inset-0 overflow-hidden">
-                <div className="absolute -top-10 -right-10 w-40 h-40 bg-white opacity-5 rounded-full"></div>
-                <div className="absolute -bottom-8 -left-8 w-24 h-24 bg-white opacity-10 rounded-full"></div>
-              </div>
-              <div className="w-10 h-10 rounded-full bg-white/20 flex items-center justify-center mr-4 relative">
-                <IconBookmark size="large" style={{ color: '#ffffff' }} />
-              </div>
-              <div className="relative">
-                <Text style={{ color: '#ffffff' }} className="text-lg font-medium">{t('标签信息')}</Text>
-                <div style={{ color: '#ffffff' }} className="text-sm opacity-80">{t('标签的基本配置')}</div>
+            {/* Header: Tag Info */}
+            <div className="flex items-center mb-2">
+              <Avatar size="small" color="blue" className="mr-2 shadow-md">
+                <IconBookmark size={16} />
+              </Avatar>
+              <div>
+                <Text className="text-lg font-medium">{t('标签信息')}</Text>
+                <div className="text-xs text-gray-600">{t('标签的基本配置')}</div>
               </div>
             </div>
 
@@ -338,28 +329,20 @@ const EditTagModal = (props) => {
                   value={inputs.new_tag}
                   onChange={(value) => setInputs({ ...inputs, new_tag: value })}
                   placeholder={t('请输入新标签，留空则解散标签')}
-                  size="large"
-                  className="!rounded-lg"
                 />
               </div>
             </div>
           </Card>
 
           <Card className="!rounded-2xl shadow-sm border-0 mb-6">
-            <div className="flex items-center mb-4 p-6 rounded-xl" style={{
-              background: 'linear-gradient(135deg, #4c1d95 0%, #6d28d9 50%, #7c3aed 100%)',
-              position: 'relative'
-            }}>
-              <div className="absolute inset-0 overflow-hidden">
-                <div className="absolute -top-10 -right-10 w-40 h-40 bg-white opacity-5 rounded-full"></div>
-                <div className="absolute -bottom-8 -left-8 w-24 h-24 bg-white opacity-10 rounded-full"></div>
-              </div>
-              <div className="w-10 h-10 rounded-full bg-white/20 flex items-center justify-center mr-4 relative">
-                <IconCode size="large" style={{ color: '#ffffff' }} />
-              </div>
-              <div className="relative">
-                <Text style={{ color: '#ffffff' }} className="text-lg font-medium">{t('模型配置')}</Text>
-                <div style={{ color: '#ffffff' }} className="text-sm opacity-80">{t('模型选择和映射设置')}</div>
+            {/* Header: Model Config */}
+            <div className="flex items-center mb-2">
+              <Avatar size="small" color="purple" className="mr-2 shadow-md">
+                <IconCode size={16} />
+              </Avatar>
+              <div>
+                <Text className="text-lg font-medium">{t('模型配置')}</Text>
+                <div className="text-xs text-gray-600">{t('模型选择和映射设置')}</div>
               </div>
             </div>
 
@@ -380,8 +363,6 @@ const EditTagModal = (props) => {
                   onChange={(value) => handleInputChange('models', value)}
                   value={inputs.models}
                   optionList={modelOptions}
-                  size="large"
-                  className="!rounded-lg"
                 />
               </div>
 
@@ -395,8 +376,6 @@ const EditTagModal = (props) => {
                   placeholder={t('输入自定义模型名称')}
                   value={customModel}
                   onChange={(value) => setCustomModel(value.trim())}
-                  size="large"
-                  className="!rounded-lg"
                 />
               </div>
 
@@ -408,23 +387,22 @@ const EditTagModal = (props) => {
                   onChange={(value) => handleInputChange('model_mapping', value)}
                   autosize
                   value={inputs.model_mapping}
-                  className="!rounded-lg font-mono"
                 />
                 <Space className="mt-2">
                   <Text
-                    className="text-blue-500 cursor-pointer"
+                    className="!text-semi-color-primary cursor-pointer"
                     onClick={() => handleInputChange('model_mapping', JSON.stringify(MODEL_MAPPING_EXAMPLE, null, 2))}
                   >
                     {t('填入模板')}
                   </Text>
                   <Text
-                    className="text-blue-500 cursor-pointer"
+                    className="!text-semi-color-primary cursor-pointer"
                     onClick={() => handleInputChange('model_mapping', JSON.stringify({}, null, 2))}
                   >
                     {t('清空重定向')}
                   </Text>
                   <Text
-                    className="text-blue-500 cursor-pointer"
+                    className="!text-semi-color-primary cursor-pointer"
                     onClick={() => handleInputChange('model_mapping', '')}
                   >
                     {t('不更改')}
@@ -435,20 +413,14 @@ const EditTagModal = (props) => {
           </Card>
 
           <Card className="!rounded-2xl shadow-sm border-0">
-            <div className="flex items-center mb-4 p-6 rounded-xl" style={{
-              background: 'linear-gradient(135deg, #065f46 0%, #059669 50%, #10b981 100%)',
-              position: 'relative'
-            }}>
-              <div className="absolute inset-0 overflow-hidden">
-                <div className="absolute -top-10 -right-10 w-40 h-40 bg-white opacity-5 rounded-full"></div>
-                <div className="absolute -bottom-8 -left-8 w-24 h-24 bg-white opacity-10 rounded-full"></div>
-              </div>
-              <div className="w-10 h-10 rounded-full bg-white/20 flex items-center justify-center mr-4 relative">
-                <IconUser size="large" style={{ color: '#ffffff' }} />
-              </div>
-              <div className="relative">
-                <Text style={{ color: '#ffffff' }} className="text-lg font-medium">{t('分组设置')}</Text>
-                <div style={{ color: '#ffffff' }} className="text-sm opacity-80">{t('用户分组配置')}</div>
+            {/* Header: Group Settings */}
+            <div className="flex items-center mb-2">
+              <Avatar size="small" color="green" className="mr-2 shadow-md">
+                <IconUser size={16} />
+              </Avatar>
+              <div>
+                <Text className="text-lg font-medium">{t('分组设置')}</Text>
+                <div className="text-xs text-gray-600">{t('用户分组配置')}</div>
               </div>
             </div>
 
@@ -464,8 +436,6 @@ const EditTagModal = (props) => {
                   onChange={(value) => handleInputChange('groups', value)}
                   value={inputs.groups}
                   optionList={groupOptions}
-                  size="large"
-                  className="!rounded-lg"
                 />
               </div>
             </div>

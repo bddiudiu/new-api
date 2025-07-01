@@ -56,12 +56,11 @@ func responseTencent2OpenAI(response *TencentChatResponse) *dto.OpenAITextRespon
 		},
 	}
 	if len(response.Choices) > 0 {
-		content, _ := json.Marshal(response.Choices[0].Messages.Content)
 		choice := dto.OpenAITextResponseChoice{
 			Index: 0,
 			Message: dto.Message{
 				Role:    "assistant",
-				Content: content,
+				Content: response.Choices[0].Messages.Content,
 			},
 			FinishReason: response.Choices[0].FinishReason,
 		}
@@ -125,10 +124,7 @@ func tencentStreamHandler(c *gin.Context, resp *http.Response) (*dto.OpenAIError
 
 	helper.Done(c)
 
-	err := resp.Body.Close()
-	if err != nil {
-		return service.OpenAIErrorWrapper(err, "close_response_body_failed", http.StatusInternalServerError), ""
-	}
+	common.CloseResponseBodyGracefully(resp)
 
 	return nil, responseText
 }
@@ -139,10 +135,7 @@ func tencentHandler(c *gin.Context, resp *http.Response) (*dto.OpenAIErrorWithSt
 	if err != nil {
 		return service.OpenAIErrorWrapper(err, "read_response_body_failed", http.StatusInternalServerError), nil
 	}
-	err = resp.Body.Close()
-	if err != nil {
-		return service.OpenAIErrorWrapper(err, "close_response_body_failed", http.StatusInternalServerError), nil
-	}
+	common.CloseResponseBodyGracefully(resp)
 	err = json.Unmarshal(responseBody, &tencentSb)
 	if err != nil {
 		return service.OpenAIErrorWrapper(err, "unmarshal_response_body_failed", http.StatusInternalServerError), nil

@@ -66,7 +66,7 @@ func SearchUserTokens(userId int, keyword string, token string) (tokens []*Token
 	if token != "" {
 		token = strings.Trim(token, "sk-")
 	}
-	err = DB.Where("user_id = ?", userId).Where("name LIKE ?", "%"+keyword+"%").Where(keyCol+" LIKE ?", "%"+token+"%").Find(&tokens).Error
+	err = DB.Where("user_id = ?", userId).Where("name LIKE ?", "%"+keyword+"%").Where(commonKeyCol+" LIKE ?", "%"+token+"%").Find(&tokens).Error
 	return tokens, err
 }
 
@@ -161,7 +161,7 @@ func GetTokenByKey(key string, fromDB bool) (token *Token, err error) {
 		// Don't return error - fall through to DB
 	}
 	fromDB = true
-	err = DB.Where(keyCol+" = ?", key).First(&token).Error
+	err = DB.Where(commonKeyCol+" = ?", key).First(&token).Error
 	return token, err
 }
 
@@ -319,4 +319,45 @@ func decreaseTokenQuota(id int, quota int) (err error) {
 		},
 	).Error
 	return err
+}
+
+// CountUserTokens returns total number of tokens for the given user, used for pagination
+func CountUserTokens(userId int) (int64, error) {
+	var total int64
+	err := DB.Model(&Token{}).Where("user_id = ?", userId).Count(&total).Error
+	return total, err
+}
+
+// BatchDeleteTokens 删除指定用户的一组令牌，返回成功删除数量
+func BatchDeleteTokens(ids []int, userId int) (int, error) {
+	if len(ids) == 0 {
+		return 0, errors.New("ids 不能为空！")
+	}
+
+	tx := DB.Begin()
+
+	var tokens []Token
+	if err := tx.Where("user_id = ? AND id IN (?)", userId, ids).Find(&tokens).Error; err != nil {
+		tx.Rollback()
+		return 0, err
+	}
+
+	if err := tx.Where("user_id = ? AND id IN (?)", userId, ids).Delete(&Token{}).Error; err != nil {
+		tx.Rollback()
+		return 0, err
+	}
+
+	if err := tx.Commit().Error; err != nil {
+		return 0, err
+	}
+
+	if common.RedisEnabled {
+		gopool.Go(func() {
+			for _, t := range tokens {
+				_ = cacheDeleteToken(t.Key)
+			}
+		})
+	}
+
+	return len(tokens), nil
 }

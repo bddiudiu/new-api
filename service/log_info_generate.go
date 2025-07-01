@@ -3,12 +3,13 @@ package service
 import (
 	"one-api/dto"
 	relaycommon "one-api/relay/common"
+	"one-api/relay/helper"
 
 	"github.com/gin-gonic/gin"
 )
 
 func GenerateTextOtherInfo(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, modelRatio, groupRatio, completionRatio float64,
-	cacheTokens int, cacheRatio float64, modelPrice float64) map[string]interface{} {
+	cacheTokens int, cacheRatio float64, modelPrice float64, userGroupRatio float64) map[string]interface{} {
 	other := make(map[string]interface{})
 	other["model_ratio"] = modelRatio
 	other["group_ratio"] = groupRatio
@@ -16,6 +17,7 @@ func GenerateTextOtherInfo(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, m
 	other["cache_tokens"] = cacheTokens
 	other["cache_ratio"] = cacheRatio
 	other["model_price"] = modelPrice
+	other["user_group_ratio"] = userGroupRatio
 	other["frt"] = float64(relayInfo.FirstResponseTime.UnixMilli() - relayInfo.StartTime.UnixMilli())
 	if relayInfo.ReasoningEffort != "" {
 		other["reasoning_effort"] = relayInfo.ReasoningEffort
@@ -30,8 +32,8 @@ func GenerateTextOtherInfo(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, m
 	return other
 }
 
-func GenerateWssOtherInfo(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, usage *dto.RealtimeUsage, modelRatio, groupRatio, completionRatio, audioRatio, audioCompletionRatio, modelPrice float64) map[string]interface{} {
-	info := GenerateTextOtherInfo(ctx, relayInfo, modelRatio, groupRatio, completionRatio, 0, 0.0, modelPrice)
+func GenerateWssOtherInfo(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, usage *dto.RealtimeUsage, modelRatio, groupRatio, completionRatio, audioRatio, audioCompletionRatio, modelPrice, userGroupRatio float64) map[string]interface{} {
+	info := GenerateTextOtherInfo(ctx, relayInfo, modelRatio, groupRatio, completionRatio, 0, 0.0, modelPrice, userGroupRatio)
 	info["ws"] = true
 	info["audio_input"] = usage.InputTokenDetails.AudioTokens
 	info["audio_output"] = usage.OutputTokenDetails.AudioTokens
@@ -42,8 +44,8 @@ func GenerateWssOtherInfo(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, us
 	return info
 }
 
-func GenerateAudioOtherInfo(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, usage *dto.Usage, modelRatio, groupRatio, completionRatio, audioRatio, audioCompletionRatio, modelPrice float64) map[string]interface{} {
-	info := GenerateTextOtherInfo(ctx, relayInfo, modelRatio, groupRatio, completionRatio, 0, 0.0, modelPrice)
+func GenerateAudioOtherInfo(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, usage *dto.Usage, modelRatio, groupRatio, completionRatio, audioRatio, audioCompletionRatio, modelPrice, userGroupRatio float64) map[string]interface{} {
+	info := GenerateTextOtherInfo(ctx, relayInfo, modelRatio, groupRatio, completionRatio, 0, 0.0, modelPrice, userGroupRatio)
 	info["audio"] = true
 	info["audio_input"] = usage.PromptTokensDetails.AudioTokens
 	info["audio_output"] = usage.CompletionTokenDetails.AudioTokens
@@ -55,10 +57,20 @@ func GenerateAudioOtherInfo(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, 
 }
 
 func GenerateClaudeOtherInfo(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, modelRatio, groupRatio, completionRatio float64,
-	cacheTokens int, cacheRatio float64, cacheCreationTokens int, cacheCreationRatio float64, modelPrice float64) map[string]interface{} {
-	info := GenerateTextOtherInfo(ctx, relayInfo, modelRatio, groupRatio, completionRatio, cacheTokens, cacheRatio, modelPrice)
+	cacheTokens int, cacheRatio float64, cacheCreationTokens int, cacheCreationRatio float64, modelPrice float64, userGroupRatio float64) map[string]interface{} {
+	info := GenerateTextOtherInfo(ctx, relayInfo, modelRatio, groupRatio, completionRatio, cacheTokens, cacheRatio, modelPrice, userGroupRatio)
 	info["claude"] = true
 	info["cache_creation_tokens"] = cacheCreationTokens
 	info["cache_creation_ratio"] = cacheCreationRatio
 	return info
+}
+
+func GenerateMjOtherInfo(priceData helper.PerCallPriceData) map[string]interface{} {
+	other := make(map[string]interface{})
+	other["model_price"] = priceData.ModelPrice
+	other["group_ratio"] = priceData.GroupRatioInfo.GroupRatio
+	if priceData.GroupRatioInfo.HasSpecialRatio {
+		other["user_group_ratio"] = priceData.GroupRatioInfo.GroupSpecialRatio
+	}
+	return other
 }

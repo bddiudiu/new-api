@@ -17,6 +17,8 @@ import (
 	"one-api/setting"
 	"strings"
 
+	"one-api/relay/constant"
+
 	"github.com/gin-gonic/gin"
 	"one-api/relay/constant"
 )
@@ -108,7 +110,7 @@ func getAndValidImageRequest(c *gin.Context, info *relaycommon.RelayInfo) (*dto.
 }
 
 func ImageHelper(c *gin.Context) *dto.OpenAIErrorWithStatusCode {
-	relayInfo := relaycommon.GenRelayInfo(c)
+	relayInfo := relaycommon.GenRelayInfoImage(c)
 
 	imageRequest, err := getAndValidImageRequest(c, relayInfo)
 	if err != nil {
@@ -116,12 +118,10 @@ func ImageHelper(c *gin.Context) *dto.OpenAIErrorWithStatusCode {
 		return service.OpenAIErrorWrapper(err, "invalid_image_request", http.StatusBadRequest)
 	}
 
-	err = helper.ModelMappedHelper(c, relayInfo)
+	err = helper.ModelMappedHelper(c, relayInfo, imageRequest)
 	if err != nil {
 		return service.OpenAIErrorWrapperLocal(err, "model_mapped_error", http.StatusInternalServerError)
 	}
-
-	imageRequest.Model = relayInfo.UpstreamModelName
 
 	priceData, err := helper.ModelPriceHelper(c, relayInfo, len(imageRequest.Prompt), 0)
 	if err != nil {
@@ -168,7 +168,7 @@ func ImageHelper(c *gin.Context) *dto.OpenAIErrorWithStatusCode {
 
 		// reset model price
 		priceData.ModelPrice *= sizeRatio * qualityRatio * float64(imageRequest.N)
-		quota = int(priceData.ModelPrice * priceData.GroupRatio * common.QuotaPerUnit)
+		quota = int(priceData.ModelPrice * priceData.GroupRatioInfo.GroupRatio * common.QuotaPerUnit)
 		userQuota, err = model.GetUserQuota(relayInfo.UserId, false)
 		if err != nil {
 			return service.OpenAIErrorWrapperLocal(err, "get_user_quota_failed", http.StatusInternalServerError)

@@ -1,63 +1,78 @@
 import React, { useEffect, useState } from 'react';
 import { API, showError, showSuccess, renderGroup, renderNumber, renderQuota } from '../../helpers';
+
+import {
+  User,
+  Shield,
+  Crown,
+  HelpCircle,
+  CheckCircle,
+  XCircle,
+  Minus,
+  Coins,
+  Activity,
+  Users,
+  DollarSign,
+  UserPlus,
+} from 'lucide-react';
 import {
   Button,
   Card,
   Divider,
   Dropdown,
-  Input,
+  Empty,
+  Form,
   Modal,
-  Select,
   Space,
   Table,
   Tag,
-  Typography,
+  Tooltip,
+  Typography
 } from '@douyinfe/semi-ui';
 import {
-  IconPlus,
+  IllustrationNoResult,
+  IllustrationNoResultDark
+} from '@douyinfe/semi-illustrations';
+import {
   IconSearch,
-  IconEdit,
-  IconDelete,
-  IconStop,
-  IconPlay,
-  IconMore,
   IconUserAdd,
-  IconArrowUp,
-  IconArrowDown,
+  IconMore,
 } from '@douyinfe/semi-icons';
 import { ITEMS_PER_PAGE } from '../../constants';
 import AddUser from '../../pages/User/AddUser';
 import EditUser from '../../pages/User/EditUser';
 import { useTranslation } from 'react-i18next';
+import { useTableCompactMode } from '../../hooks/useTableCompactMode';
 
 const { Text } = Typography;
 
 const UsersTable = () => {
   const { t } = useTranslation();
+  const [compactMode, setCompactMode] = useTableCompactMode('users');
 
   function renderRole(role) {
     switch (role) {
       case 1:
         return (
-          <Tag size='large' color='blue' shape='circle'>
+          <Tag size='large' color='blue' shape='circle' prefixIcon={<User size={14} />}>
             {t('普通用户')}
           </Tag>
         );
       case 10:
         return (
-          <Tag color='yellow' size='large' shape='circle'>
+          <Tag color='yellow' size='large' shape='circle' prefixIcon={<Shield size={14} />}>
             {t('管理员')}
           </Tag>
         );
       case 100:
         return (
-          <Tag color='orange' size='large' shape='circle'>
+          <Tag color='orange' size='large' shape='circle' prefixIcon={<Crown size={14} />}>
             {t('超级管理员')}
           </Tag>
         );
       default:
         return (
-          <Tag color='red' size='large' shape='circle'>
+          <Tag color='red' size='large' shape='circle' prefixIcon={<HelpCircle size={14} />}>
             {t('未知身份')}
           </Tag>
         );
@@ -67,16 +82,16 @@ const UsersTable = () => {
   const renderStatus = (status) => {
     switch (status) {
       case 1:
-        return <Tag size='large' color='green' shape='circle'>{t('已激活')}</Tag>;
+        return <Tag size='large' color='green' shape='circle' prefixIcon={<CheckCircle size={14} />}>{t('已激活')}</Tag>;
       case 2:
         return (
-          <Tag size='large' color='red' shape='circle'>
+          <Tag size='large' color='red' shape='circle' prefixIcon={<XCircle size={14} />}>
             {t('已封禁')}
           </Tag>
         );
       default:
         return (
-          <Tag size='large' color='grey' shape='circle'>
+          <Tag size='large' color='grey' shape='circle' prefixIcon={<HelpCircle size={14} />}>
             {t('未知状态')}
           </Tag>
         );
@@ -91,6 +106,27 @@ const UsersTable = () => {
     {
       title: t('用户名'),
       dataIndex: 'username',
+      render: (text, record) => {
+        const remark = record.remark;
+        if (!remark) {
+          return <span>{text}</span>;
+        }
+        const maxLen = 10;
+        const displayRemark = remark.length > maxLen ? remark.slice(0, maxLen) + '…' : remark;
+        return (
+          <Space spacing={2}>
+            <span>{text}</span>
+            <Tooltip content={remark} position="top" showArrow>
+              <Tag color='white' size='large' shape='circle' className="!text-xs">
+                <div className="flex items-center gap-1">
+                  <div className="w-2 h-2 flex-shrink-0" style={{ backgroundColor: '#10b981' }} />
+                  {displayRemark}
+                </div>
+              </Tag>
+            </Tooltip>
+          </Space>
+        );
+      },
     },
     {
       title: t('分组'),
@@ -106,13 +142,13 @@ const UsersTable = () => {
         return (
           <div>
             <Space spacing={1}>
-              <Tag color='white' size='large' shape='circle' className="!text-xs">
+              <Tag color='white' size='large' shape='circle' className="!text-xs" prefixIcon={<Coins size={14} />}>
                 {t('剩余')}: {renderQuota(record.quota)}
               </Tag>
-              <Tag color='white' size='large' shape='circle' className="!text-xs">
+              <Tag color='white' size='large' shape='circle' className="!text-xs" prefixIcon={<Coins size={14} />}>
                 {t('已用')}: {renderQuota(record.used_quota)}
               </Tag>
-              <Tag color='white' size='large' shape='circle' className="!text-xs">
+              <Tag color='white' size='large' shape='circle' className="!text-xs" prefixIcon={<Activity size={14} />}>
                 {t('调用')}: {renderNumber(record.request_count)}
               </Tag>
             </Space>
@@ -127,13 +163,13 @@ const UsersTable = () => {
         return (
           <div>
             <Space spacing={1}>
-              <Tag color='white' size='large' shape='circle' className="!text-xs">
+              <Tag color='white' size='large' shape='circle' className="!text-xs" prefixIcon={<Users size={14} />}>
                 {t('邀请')}: {renderNumber(record.aff_count)}
               </Tag>
-              <Tag color='white' size='large' shape='circle' className="!text-xs">
+              <Tag color='white' size='large' shape='circle' className="!text-xs" prefixIcon={<DollarSign size={14} />}>
                 {t('收益')}: {renderQuota(record.aff_history_quota)}
               </Tag>
-              <Tag color='white' size='large' shape='circle' className="!text-xs">
+              <Tag color='white' size='large' shape='circle' className="!text-xs" prefixIcon={<UserPlus size={14} />}>
                 {record.inviter_id === 0 ? t('无邀请人') : `邀请人: ${record.inviter_id}`}
               </Tag>
             </Space>
@@ -155,7 +191,7 @@ const UsersTable = () => {
         return (
           <div>
             {record.DeletedAt !== null ? (
-              <Tag color='red' shape='circle'>{t('已注销')}</Tag>
+              <Tag color='red' shape='circle' prefixIcon={<Minus size={14} />}>{t('已注销')}</Tag>
             ) : (
               renderStatus(text)
             )}
@@ -177,7 +213,6 @@ const UsersTable = () => {
           {
             node: 'item',
             name: t('提升'),
-            icon: <IconArrowUp />,
             type: 'warning',
             onClick: () => {
               Modal.confirm({
@@ -192,7 +227,6 @@ const UsersTable = () => {
           {
             node: 'item',
             name: t('降级'),
-            icon: <IconArrowDown />,
             type: 'secondary',
             onClick: () => {
               Modal.confirm({
@@ -207,7 +241,6 @@ const UsersTable = () => {
           {
             node: 'item',
             name: t('注销'),
-            icon: <IconDelete />,
             type: 'danger',
             onClick: () => {
               Modal.confirm({
@@ -228,7 +261,6 @@ const UsersTable = () => {
           moreMenuItems.splice(-1, 0, {
             node: 'item',
             name: t('禁用'),
-            icon: <IconStop />,
             type: 'warning',
             onClick: () => {
               manageUser(record.id, 'disable', record);
@@ -238,7 +270,6 @@ const UsersTable = () => {
           moreMenuItems.splice(-1, 0, {
             node: 'item',
             name: t('启用'),
-            icon: <IconPlay />,
             type: 'secondary',
             onClick: () => {
               manageUser(record.id, 'enable', record);
@@ -250,11 +281,9 @@ const UsersTable = () => {
         return (
           <Space>
             <Button
-              icon={<IconEdit />}
               theme='light'
               type='tertiary'
               size="small"
-              className="!rounded-full"
               onClick={() => {
                 setEditingUser(record);
                 setShowEditUser(true);
@@ -268,11 +297,10 @@ const UsersTable = () => {
               menu={moreMenuItems}
             >
               <Button
-                icon={<IconMore />}
                 theme='light'
                 type='tertiary'
                 size="small"
-                className="!rounded-full"
+                icon={<IconMore />}
               />
             </Dropdown>
           </Space>
@@ -285,9 +313,7 @@ const UsersTable = () => {
   const [loading, setLoading] = useState(true);
   const [activePage, setActivePage] = useState(1);
   const [pageSize, setPageSize] = useState(ITEMS_PER_PAGE);
-  const [searchKeyword, setSearchKeyword] = useState('');
   const [searching, setSearching] = useState(false);
-  const [searchGroup, setSearchGroup] = useState('');
   const [groupOptions, setGroupOptions] = useState([]);
   const [userCount, setUserCount] = useState(ITEMS_PER_PAGE);
   const [showAddUser, setShowAddUser] = useState(false);
@@ -295,6 +321,24 @@ const UsersTable = () => {
   const [editingUser, setEditingUser] = useState({
     id: undefined,
   });
+
+  // Form 初始值
+  const formInitValues = {
+    searchKeyword: '',
+    searchGroup: '',
+  };
+
+  // Form API 引用
+  const [formApi, setFormApi] = useState(null);
+
+  // 获取表单值的辅助函数
+  const getFormValues = () => {
+    const formValues = formApi ? formApi.getValues() : {};
+    return {
+      searchKeyword: formValues.searchKeyword || '',
+      searchGroup: formValues.searchGroup || '',
+    };
+  };
 
   const removeRecord = (key) => {
     let newDataSource = [...users];
@@ -363,9 +407,16 @@ const UsersTable = () => {
   const searchUsers = async (
     startIdx,
     pageSize,
-    searchKeyword,
-    searchGroup,
+    searchKeyword = null,
+    searchGroup = null,
   ) => {
+    // 如果没有传递参数，从表单获取值
+    if (searchKeyword === null || searchGroup === null) {
+      const formValues = getFormValues();
+      searchKeyword = formValues.searchKeyword;
+      searchGroup = formValues.searchGroup;
+    }
+
     if (searchKeyword === '' && searchGroup === '') {
       // if keyword is blank, load files instead.
       await loadUsers(startIdx, pageSize);
@@ -387,12 +438,9 @@ const UsersTable = () => {
     setSearching(false);
   };
 
-  const handleKeywordChange = async (value) => {
-    setSearchKeyword(value.trim());
-  };
-
   const handlePageChange = (page) => {
     setActivePage(page);
+    const { searchKeyword, searchGroup } = getFormValues();
     if (searchKeyword === '' && searchGroup === '') {
       loadUsers(page, pageSize).then();
     } else {
@@ -413,10 +461,11 @@ const UsersTable = () => {
 
   const refresh = async () => {
     setActivePage(1);
-    if (searchKeyword === '') {
-      await loadUsers(activePage, pageSize);
+    const { searchKeyword, searchGroup } = getFormValues();
+    if (searchKeyword === '' && searchGroup === '') {
+      await loadUsers(1, pageSize);
     } else {
-      await searchUsers(activePage, pageSize, searchKeyword, searchGroup);
+      await searchUsers(1, pageSize, searchKeyword, searchGroup);
     }
   };
 
@@ -465,9 +514,19 @@ const UsersTable = () => {
   const renderHeader = () => (
     <div className="flex flex-col w-full">
       <div className="mb-2">
-        <div className="flex items-center text-blue-500">
-          <IconUserAdd className="mr-2" />
-          <Text>{t('用户管理页面，可以查看和管理所有注册用户的信息、权限和状态。')}</Text>
+        <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-2 w-full">
+          <div className="flex items-center text-blue-500">
+            <IconUserAdd className="mr-2" />
+            <Text>{t('用户管理页面，可以查看和管理所有注册用户的信息、权限和状态。')}</Text>
+          </div>
+          <Button
+            theme='light'
+            type='secondary'
+            className="w-full md:w-auto"
+            onClick={() => setCompactMode(!compactMode)}
+          >
+            {compactMode ? t('自适应列表') : t('紧凑列表')}
+          </Button>
         </div>
       </div>
 
@@ -478,8 +537,7 @@ const UsersTable = () => {
           <Button
             theme='light'
             type='primary'
-            icon={<IconPlus />}
-            className="!rounded-full w-full md:w-auto"
+            className="w-full md:w-auto"
             onClick={() => {
               setShowAddUser(true);
             }}
@@ -488,41 +546,75 @@ const UsersTable = () => {
           </Button>
         </div>
 
-        <div className="flex flex-col md:flex-row items-center gap-4 w-full md:w-auto order-1 md:order-2">
-          <div className="relative w-full md:w-64">
-            <Input
-              prefix={<IconSearch />}
-              placeholder={t('支持搜索用户的 ID、用户名、显示名称和邮箱地址')}
-              value={searchKeyword}
-              onChange={handleKeywordChange}
-              className="!rounded-full"
-              showClear
-            />
+        <Form
+          initValues={formInitValues}
+          getFormApi={(api) => setFormApi(api)}
+          onSubmit={() => {
+            setActivePage(1);
+            searchUsers(1, pageSize);
+          }}
+          allowEmpty={true}
+          autoComplete="off"
+          layout="horizontal"
+          trigger="change"
+          stopValidateWithError={false}
+          className="w-full md:w-auto order-1 md:order-2"
+        >
+          <div className="flex flex-col md:flex-row items-center gap-4 w-full md:w-auto">
+            <div className="relative w-full md:w-64">
+              <Form.Input
+                field="searchKeyword"
+                prefix={<IconSearch />}
+                placeholder={t('支持搜索用户的 ID、用户名、显示名称和邮箱地址')}
+                showClear
+                pure
+              />
+            </div>
+            <div className="w-full md:w-48">
+              <Form.Select
+                field="searchGroup"
+                placeholder={t('选择分组')}
+                optionList={groupOptions}
+                onChange={(value) => {
+                  // 分组变化时自动搜索
+                  setTimeout(() => {
+                    setActivePage(1);
+                    searchUsers(1, pageSize);
+                  }, 100);
+                }}
+                className="w-full"
+                showClear
+                pure
+              />
+            </div>
+            <div className="flex gap-2 w-full md:w-auto">
+              <Button
+                type="primary"
+                htmlType="submit"
+                loading={loading || searching}
+                className="flex-1 md:flex-initial md:w-auto"
+              >
+                {t('查询')}
+              </Button>
+              <Button
+                theme="light"
+                onClick={() => {
+                  if (formApi) {
+                    formApi.reset();
+                    // 重置后立即查询，使用setTimeout确保表单重置完成
+                    setTimeout(() => {
+                      setActivePage(1);
+                      loadUsers(1, pageSize);
+                    }, 100);
+                  }
+                }}
+                className="flex-1 md:flex-initial md:w-auto"
+              >
+                {t('重置')}
+              </Button>
+            </div>
           </div>
-          <div className="w-full md:w-48">
-            <Select
-              placeholder={t('选择分组')}
-              optionList={groupOptions}
-              value={searchGroup}
-              onChange={(value) => {
-                setSearchGroup(value);
-                searchUsers(activePage, pageSize, searchKeyword, value);
-              }}
-              className="!rounded-full w-full"
-              showClear
-            />
-          </div>
-          <Button
-            type="primary"
-            onClick={() => {
-              searchUsers(activePage, pageSize, searchKeyword, searchGroup);
-            }}
-            loading={searching}
-            className="!rounded-full w-full md:w-auto"
-          >
-            {t('查询')}
-          </Button>
-        </div>
+        </Form>
       </div>
     </div>
   );
@@ -548,9 +640,9 @@ const UsersTable = () => {
         bordered={false}
       >
         <Table
-          columns={columns}
+          columns={compactMode ? columns.map(({ fixed, ...rest }) => rest) : columns}
           dataSource={users}
-          scroll={{ x: 'max-content' }}
+          scroll={compactMode ? undefined : { x: 'max-content' }}
           pagination={{
             formatPageText: (page) =>
               t('第 {{start}} - {{end}} 条，共 {{total}} 条', {
@@ -570,7 +662,15 @@ const UsersTable = () => {
           }}
           loading={loading}
           onRow={handleRow}
-          className="rounded-xl overflow-hidden"
+          empty={
+            <Empty
+              image={<IllustrationNoResult style={{ width: 150, height: 150 }} />}
+              darkModeImage={<IllustrationNoResultDark style={{ width: 150, height: 150 }} />}
+              description={t('搜索无结果')}
+              style={{ padding: 30 }}
+            />
+          }
+          className="overflow-hidden"
           size="middle"
         />
       </Card>

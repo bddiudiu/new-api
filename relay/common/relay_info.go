@@ -34,9 +34,14 @@ type ClaudeConvertInfo struct {
 }
 
 const (
-	RelayFormatOpenAI = "openai"
-	RelayFormatClaude = "claude"
-	RelayFormatGemini = "gemini"
+	RelayFormatOpenAI          = "openai"
+	RelayFormatClaude          = "claude"
+	RelayFormatGemini          = "gemini"
+	RelayFormatOpenAIResponses = "openai_responses"
+	RelayFormatOpenAIAudio     = "openai_audio"
+	RelayFormatOpenAIImage     = "openai_image"
+	RelayFormatRerank          = "rerank"
+	RelayFormatEmbedding       = "embedding"
 )
 
 type RerankerInfo struct {
@@ -60,7 +65,8 @@ type RelayInfo struct {
 	TokenId           int
 	TokenKey          string
 	UserId            int
-	Group             string
+	UsingGroup        string // 使用的分组
+	UserGroup         string // 用户所在分组
 	TokenUnlimited    bool
 	StartTime         time.Time
 	FirstResponseTime time.Time
@@ -142,6 +148,7 @@ func GenRelayInfoClaude(c *gin.Context) *RelayInfo {
 func GenRelayInfoRerank(c *gin.Context, req *dto.RerankRequest) *RelayInfo {
 	info := GenRelayInfo(c)
 	info.RelayMode = relayconstant.RelayModeRerank
+	info.RelayFormat = RelayFormatRerank
 	info.RerankerInfo = &RerankerInfo{
 		Documents:       req.Documents,
 		ReturnDocuments: req.GetReturnDocuments(),
@@ -149,9 +156,25 @@ func GenRelayInfoRerank(c *gin.Context, req *dto.RerankRequest) *RelayInfo {
 	return info
 }
 
+func GenRelayInfoOpenAIAudio(c *gin.Context) *RelayInfo {
+	info := GenRelayInfo(c)
+	info.RelayFormat = RelayFormatOpenAIAudio
+	return info
+}
+
+func GenRelayInfoEmbedding(c *gin.Context) *RelayInfo {
+	info := GenRelayInfo(c)
+	info.RelayFormat = RelayFormatEmbedding
+	return info
+}
+
 func GenRelayInfoResponses(c *gin.Context, req *dto.OpenAIResponsesRequest) *RelayInfo {
 	info := GenRelayInfo(c)
 	info.RelayMode = relayconstant.RelayModeResponses
+	info.RelayFormat = RelayFormatOpenAIResponses
+
+	info.SupportStreamOptions = false
+
 	info.ResponsesUsageInfo = &ResponsesUsageInfo{
 		BuiltInTools: make(map[string]*BuildInToolInfo),
 	}
@@ -174,6 +197,19 @@ func GenRelayInfoResponses(c *gin.Context, req *dto.OpenAIResponsesRequest) *Rel
 	return info
 }
 
+func GenRelayInfoGemini(c *gin.Context) *RelayInfo {
+	info := GenRelayInfo(c)
+	info.RelayFormat = RelayFormatGemini
+	info.ShouldIncludeUsage = false
+	return info
+}
+
+func GenRelayInfoImage(c *gin.Context) *RelayInfo {
+	info := GenRelayInfo(c)
+	info.RelayFormat = RelayFormatOpenAIImage
+	return info
+}
+
 func GenRelayInfo(c *gin.Context) *RelayInfo {
 	channelType := c.GetInt("channel_type")
 	channelId := c.GetInt("channel_id")
@@ -183,7 +219,6 @@ func GenRelayInfo(c *gin.Context) *RelayInfo {
 	tokenId := c.GetInt("token_id")
 	tokenKey := c.GetString("token_key")
 	userId := c.GetInt("id")
-	group := c.GetString("group")
 	tokenUnlimited := c.GetBool("token_unlimited_quota")
 	startTime := c.GetTime(constant.ContextKeyRequestStartTime)
 	// firstResponseTime = time.Now() - 1 second
@@ -203,7 +238,8 @@ func GenRelayInfo(c *gin.Context) *RelayInfo {
 		TokenId:           tokenId,
 		TokenKey:          tokenKey,
 		UserId:            userId,
-		Group:             group,
+		UsingGroup:        c.GetString(constant.ContextKeyUsingGroup),
+		UserGroup:         c.GetString(constant.ContextKeyUserGroup),
 		TokenUnlimited:    tokenUnlimited,
 		StartTime:         startTime,
 		FirstResponseTime: startTime.Add(-time.Second),
@@ -241,10 +277,6 @@ func GenRelayInfo(c *gin.Context) *RelayInfo {
 	if streamSupportedChannels[info.ChannelType] {
 		info.SupportStreamOptions = true
 	}
-	// responses 模式不支持 StreamOptions
-	if relayconstant.RelayModeResponses == info.RelayMode {
-		info.SupportStreamOptions = false
-	}
 	return info
 }
 
@@ -280,4 +312,23 @@ func GenTaskRelayInfo(c *gin.Context) *TaskRelayInfo {
 		RelayInfo: GenRelayInfo(c),
 	}
 	return info
+}
+
+type TaskSubmitReq struct {
+	Prompt   string                 `json:"prompt"`
+	Model    string                 `json:"model,omitempty"`
+	Mode     string                 `json:"mode,omitempty"`
+	Image    string                 `json:"image,omitempty"`
+	Size     string                 `json:"size,omitempty"`
+	Duration int                    `json:"duration,omitempty"`
+	Metadata map[string]interface{} `json:"metadata,omitempty"`
+}
+
+type TaskInfo struct {
+	Code     int    `json:"code"`
+	TaskID   string `json:"task_id"`
+	Status   string `json:"status"`
+	Reason   string `json:"reason,omitempty"`
+	Url      string `json:"url,omitempty"`
+	Progress string `json:"progress,omitempty"`
 }

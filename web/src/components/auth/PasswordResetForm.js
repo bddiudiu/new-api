@@ -5,7 +5,6 @@ import { Button, Card, Form, Typography } from '@douyinfe/semi-ui';
 import { IconMail } from '@douyinfe/semi-icons';
 import { Link } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
-import Background from '/example.png';
 
 const { Text, Title } = Typography;
 
@@ -79,24 +78,16 @@ const PasswordResetForm = () => {
   }
 
   return (
-    <div className="min-h-screen relative flex items-center justify-center py-12 px-4 sm:px-6 lg:px-8 overflow-hidden">
-      {/* 背景图片容器 - 放大并保持居中 */}
-      <div
-        className="absolute inset-0 z-0 bg-cover bg-center scale-125 opacity-100"
-        style={{
-          backgroundImage: `url(${Background})`
-        }}
-      ></div>
-
-      {/* 半透明遮罩层 */}
-      <div className="absolute inset-0 bg-gradient-to-br from-teal-500/30 via-blue-500/30 to-purple-500/30 backdrop-blur-sm z-0"></div>
-
-      <div className="w-full max-w-sm relative z-10">
+    <div className="relative overflow-hidden bg-gray-100 flex items-center justify-center py-12 px-4 sm:px-6 lg:px-8">
+      {/* 背景模糊晕染球 */}
+      <div className="blur-ball blur-ball-indigo" style={{ top: '-80px', right: '-80px', transform: 'none' }} />
+      <div className="blur-ball blur-ball-teal" style={{ top: '50%', left: '-120px' }} />
+      <div className="w-full max-w-sm mt-[64px]">
         <div className="flex flex-col items-center">
           <div className="w-full max-w-md">
             <div className="flex items-center justify-center mb-6 gap-2">
               <img src={logo} alt="Logo" className="h-10 rounded-full" />
-              <Title heading={3} className='!text-white'>{systemName}</Title>
+              <Title heading={3} className='!text-gray-800'>{systemName}</Title>
             </div>
 
             <Card className="shadow-xl border-0 !rounded-2xl overflow-hidden">
@@ -111,7 +102,6 @@ const PasswordResetForm = () => {
                     placeholder={t('请输入您的邮箱地址')}
                     name="email"
                     size="large"
-                    className="!rounded-md"
                     value={email}
                     onChange={handleChange}
                     prefix={<IconMail />}

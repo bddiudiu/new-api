@@ -108,12 +108,11 @@ func responseZhipu2OpenAI(response *ZhipuResponse) *dto.OpenAITextResponse {
 		Usage:   response.Data.Usage,
 	}
 	for i, choice := range response.Data.Choices {
-		content, _ := json.Marshal(strings.Trim(choice.Content, "\""))
 		openaiChoice := dto.OpenAITextResponseChoice{
 			Index: i,
 			Message: dto.Message{
 				Role:    choice.Role,
-				Content: content,
+				Content: strings.Trim(choice.Content, "\""),
 			},
 			FinishReason: "",
 		}
@@ -211,10 +210,7 @@ func zhipuStreamHandler(c *gin.Context, resp *http.Response) (*dto.OpenAIErrorWi
 			return false
 		}
 	})
-	err := resp.Body.Close()
-	if err != nil {
-		return service.OpenAIErrorWrapper(err, "close_response_body_failed", http.StatusInternalServerError), nil
-	}
+	common.CloseResponseBodyGracefully(resp)
 	return nil, usage
 }
 
@@ -224,10 +220,7 @@ func zhipuHandler(c *gin.Context, resp *http.Response) (*dto.OpenAIErrorWithStat
 	if err != nil {
 		return service.OpenAIErrorWrapper(err, "read_response_body_failed", http.StatusInternalServerError), nil
 	}
-	err = resp.Body.Close()
-	if err != nil {
-		return service.OpenAIErrorWrapper(err, "close_response_body_failed", http.StatusInternalServerError), nil
-	}
+	common.CloseResponseBodyGracefully(resp)
 	err = json.Unmarshal(responseBody, &zhipuResponse)
 	if err != nil {
 		return service.OpenAIErrorWrapper(err, "unmarshal_response_body_failed", http.StatusInternalServerError), nil

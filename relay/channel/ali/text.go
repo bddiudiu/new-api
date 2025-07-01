@@ -45,10 +45,7 @@ func aliEmbeddingHandler(c *gin.Context, resp *http.Response) (*dto.OpenAIErrorW
 		return service.OpenAIErrorWrapper(err, "unmarshal_response_body_failed", http.StatusInternalServerError), nil
 	}
 
-	err = resp.Body.Close()
-	if err != nil {
-		return service.OpenAIErrorWrapper(err, "close_response_body_failed", http.StatusInternalServerError), nil
-	}
+	common.CloseResponseBodyGracefully(resp)
 
 	if aliResponse.Code != "" {
 		return &dto.OpenAIErrorWithStatusCode{
@@ -96,12 +93,11 @@ func embeddingResponseAli2OpenAI(response *AliEmbeddingResponse, model string) *
 }
 
 func responseAli2OpenAI(response *AliResponse) *dto.OpenAITextResponse {
-	content, _ := json.Marshal(response.Output.Text)
 	choice := dto.OpenAITextResponseChoice{
 		Index: 0,
 		Message: dto.Message{
 			Role:    "assistant",
-			Content: content,
+			Content: response.Output.Text,
 		},
 		FinishReason: response.Output.FinishReason,
 	}
@@ -187,10 +183,7 @@ func aliStreamHandler(c *gin.Context, resp *http.Response) (*dto.OpenAIErrorWith
 			return false
 		}
 	})
-	err := resp.Body.Close()
-	if err != nil {
-		return service.OpenAIErrorWrapper(err, "close_response_body_failed", http.StatusInternalServerError), nil
-	}
+	common.CloseResponseBodyGracefully(resp)
 	return nil, &usage
 }
 
@@ -200,10 +193,7 @@ func aliHandler(c *gin.Context, resp *http.Response) (*dto.OpenAIErrorWithStatus
 	if err != nil {
 		return service.OpenAIErrorWrapper(err, "read_response_body_failed", http.StatusInternalServerError), nil
 	}
-	err = resp.Body.Close()
-	if err != nil {
-		return service.OpenAIErrorWrapper(err, "close_response_body_failed", http.StatusInternalServerError), nil
-	}
+	common.CloseResponseBodyGracefully(resp)
 	err = json.Unmarshal(responseBody, &aliResponse)
 	if err != nil {
 		return service.OpenAIErrorWrapper(err, "unmarshal_response_body_failed", http.StatusInternalServerError), nil

@@ -11,6 +11,7 @@ import (
 func SetRelayRouter(router *gin.Engine) {
 	router.Use(middleware.CORS())
 	router.Use(middleware.DecompressRequestMiddleware())
+	router.Use(middleware.StatsMiddleware())
 	// https://platform.openai.com/docs/api-reference/introduction
 	modelsRouter := router.Group("/v1/models")
 	modelsRouter.Use(middleware.TokenAuth())
@@ -62,6 +63,7 @@ func SetRelayRouter(router *gin.Engine) {
 		httpRouter.DELETE("/models/:model", controller.RelayNotImplemented)
 		httpRouter.POST("/moderations", controller.Relay)
 		httpRouter.POST("/rerank", controller.Relay)
+		httpRouter.POST("/models/*path", controller.Relay)
 	}
 
 	relayMjRouter := router.Group("/mj")
