@@ -34,14 +34,13 @@ func RelayMidjourneyImage(c *gin.Context) {
 	}
 	var httpClient *http.Client
 	if channel, err := model.CacheGetChannel(midjourneyTask.ChannelId); err == nil {
-		if proxy, ok := channel.GetSetting()["proxy"]; ok {
-			if proxyURL, ok := proxy.(string); ok && proxyURL != "" {
-				if httpClient, err = service.NewProxyHttpClient(proxyURL); err != nil {
-					c.JSON(400, gin.H{
-						"error": "proxy_url_invalid",
-					})
-					return
-				}
+		proxy := channel.GetSetting().Proxy
+		if proxy != "" {
+			if httpClient, err = service.NewProxyHttpClient(proxy); err != nil {
+				c.JSON(400, gin.H{
+					"error": "proxy_url_invalid",
+				})
+				return
 			}
 		}
 	}
@@ -106,6 +105,9 @@ func RelayMidjourneyNotify(c *gin.Context) *dto.MidjourneyResponse {
 	midjourneyTask.StartTime = midjRequest.StartTime
 	midjourneyTask.FinishTime = midjRequest.FinishTime
 	midjourneyTask.ImageUrl = midjRequest.ImageUrl
+	midjourneyTask.VideoUrl = midjRequest.VideoUrl
+	videoUrlsStr, _ := json.Marshal(midjRequest.VideoUrls)
+	midjourneyTask.VideoUrls = string(videoUrlsStr)
 	midjourneyTask.Status = midjRequest.Status
 	midjourneyTask.FailReason = midjRequest.FailReason
 	err = midjourneyTask.Update()
@@ -136,6 +138,9 @@ func coverMidjourneyTaskDto(c *gin.Context, originTask *model.Midjourney) (midjo
 	} else {
 		midjourneyTask.ImageUrl = originTask.ImageUrl
 	}
+	if originTask.VideoUrl != "" {
+		midjourneyTask.VideoUrl = originTask.VideoUrl
+	}
 	midjourneyTask.Status = originTask.Status
 	midjourneyTask.FailReason = originTask.FailReason
 	midjourneyTask.Action = originTask.Action
@@ -146,6 +151,13 @@ func coverMidjourneyTaskDto(c *gin.Context, originTask *model.Midjourney) (midjo
 		err := json.Unmarshal([]byte(originTask.Buttons), &buttons)
 		if err == nil {
 			midjourneyTask.Buttons = buttons
+		}
+	}
+	if originTask.VideoUrls != "" {
+		var videoUrls []dto.ImgUrls
+		err := json.Unmarshal([]byte(originTask.VideoUrls), &videoUrls)
+		if err == nil {
+			midjourneyTask.VideoUrls = videoUrls
 		}
 	}
 	if originTask.Properties != "" {
@@ -162,7 +174,7 @@ func RelaySwapFace(c *gin.Context) *dto.MidjourneyResponse {
 	startTime := time.Now().UnixNano() / int64(time.Millisecond)
 	tokenId := c.GetInt("token_id")
 	userId := c.GetInt("id")
-	group := c.GetString("group")
+	//group := c.GetString("group")
 	channelId := c.GetInt("channel_id")
 	relayInfo := relaycommon.GenRelayInfo(c)
 	var swapFaceRequest dto.SwapFaceRequest
@@ -208,8 +220,17 @@ func RelaySwapFace(c *gin.Context) *dto.MidjourneyResponse {
 			tokenName := c.GetString("token_name")
 			logContent := fmt.Sprintf("模型固定价格 %.2f，分组倍率 %.2f，操作 %s", priceData.ModelPrice, priceData.GroupRatioInfo.GroupRatio, constant.MjActionSwapFace)
 			other := service.GenerateMjOtherInfo(priceData)
-			model.RecordConsumeLog(c, userId, channelId, 0, 0, modelName, tokenName,
-				priceData.Quota, logContent, tokenId, userQuota, 0, false, group, other)
+			model.RecordConsumeLog(c, relayInfo.UserId, model.RecordConsumeLogParams{
+				ChannelId: channelId,
+				ModelName: modelName,
+				TokenName: tokenName,
+				Quota:     priceData.Quota,
+				Content:   logContent,
+				TokenId:   tokenId,
+				UserQuota: userQuota,
+				Group:     relayInfo.UsingGroup,
+				Other:     other,
+			})
 			model.UpdateUserUsedQuotaAndRequestCount(userId, priceData.Quota)
 			model.UpdateChannelUsedQuota(channelId, priceData.Quota)
 		}
@@ -350,7 +371,7 @@ func RelayMidjourneyTask(c *gin.Context, relayMode int) *dto.MidjourneyResponse 
 
 func RelayMidjourneySubmit(c *gin.Context, relayMode int) *dto.MidjourneyResponse {
 
-	tokenId := c.GetInt("token_id")
+	//tokenId := c.GetInt("token_id")
 	//channelType := c.GetInt("channel")
 	userId := c.GetInt("id")
 	group := c.GetString("group")
@@ -370,6 +391,9 @@ func RelayMidjourneySubmit(c *gin.Context, relayMode int) *dto.MidjourneyRespons
 		}
 		relayMode = relayconstant.RelayModeMidjourneyChange
 	}
+	if relayMode == relayconstant.RelayModeMidjourneyVideo {
+		midjRequest.Action = constant.MjActionVideo
+	}
 
 	if relayMode == relayconstant.RelayModeMidjourneyImagine { //绘画任务，此类任务可重复
 		if midjRequest.Prompt == "" {
@@ -378,6 +402,8 @@ func RelayMidjourneySubmit(c *gin.Context, relayMode int) *dto.MidjourneyRespons
 		midjRequest.Action = constant.MjActionImagine
 	} else if relayMode == relayconstant.RelayModeMidjourneyDescribe { //按图生文任务，此类任务可重复
 		midjRequest.Action = constant.MjActionDescribe
+	} else if relayMode == relayconstant.RelayModeMidjourneyEdits { //编辑任务，此类任务可重复
+		midjRequest.Action = constant.MjActionEdits
 	} else if relayMode == relayconstant.RelayModeMidjourneyShorten { //缩短任务，此类任务可重复，plus only
 		midjRequest.Action = constant.MjActionShorten
 	} else if relayMode == relayconstant.RelayModeMidjourneyBlend { //绘画任务，此类任务可重复
@@ -412,6 +438,14 @@ func RelayMidjourneySubmit(c *gin.Context, relayMode int) *dto.MidjourneyRespons
 			//}
 			mjId = midjRequest.TaskId
 			midjRequest.Action = constant.MjActionModal
+		} else if relayMode == relayconstant.RelayModeMidjourneyVideo {
+			midjRequest.Action = constant.MjActionVideo
+			if midjRequest.TaskId == "" {
+				return service.MidjourneyErrorWrapper(constant.MjRequestError, "task_id_is_required")
+			} else if midjRequest.Action == "" {
+				return service.MidjourneyErrorWrapper(constant.MjRequestError, "action_is_required")
+			}
+			mjId = midjRequest.TaskId
 		}
 
 		originTask := model.GetByMJId(userId, mjId)
@@ -492,8 +526,17 @@ func RelayMidjourneySubmit(c *gin.Context, relayMode int) *dto.MidjourneyRespons
 			tokenName := c.GetString("token_name")
 			logContent := fmt.Sprintf("模型固定价格 %.2f，分组倍率 %.2f，操作 %s，ID %s", priceData.ModelPrice, priceData.GroupRatioInfo.GroupRatio, midjRequest.Action, midjResponse.Result)
 			other := service.GenerateMjOtherInfo(priceData)
-			model.RecordConsumeLog(c, userId, channelId, 0, 0, modelName, tokenName,
-				priceData.Quota, logContent, tokenId, userQuota, 0, false, group, other)
+			model.RecordConsumeLog(c, relayInfo.UserId, model.RecordConsumeLogParams{
+				ChannelId: channelId,
+				ModelName: modelName,
+				TokenName: tokenName,
+				Quota:     priceData.Quota,
+				Content:   logContent,
+				TokenId:   relayInfo.TokenId,
+				UserQuota: userQuota,
+				Group:     group,
+				Other:     other,
+			})
 			model.UpdateUserUsedQuotaAndRequestCount(userId, priceData.Quota)
 			model.UpdateChannelUsedQuota(channelId, priceData.Quota)
 		}

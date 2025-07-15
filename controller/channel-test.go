@@ -11,12 +11,12 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"one-api/common"
+	"one-api/constant"
 	"one-api/dto"
 	"one-api/middleware"
 	"one-api/model"
 	"one-api/relay"
 	relaycommon "one-api/relay/common"
-	"one-api/relay/constant"
 	"one-api/relay/helper"
 	"one-api/service"
 	"strconv"
@@ -31,19 +31,19 @@ import (
 
 func testChannel(channel *model.Channel, testModel string) (err error, openAIErrorWithStatusCode *dto.OpenAIErrorWithStatusCode) {
 	tik := time.Now()
-	if channel.Type == common.ChannelTypeMidjourney {
+	if channel.Type == constant.ChannelTypeMidjourney {
 		return errors.New("midjourney channel test is not supported"), nil
 	}
-	if channel.Type == common.ChannelTypeMidjourneyPlus {
-		return errors.New("midjourney plus channel test is not supported!!!"), nil
+	if channel.Type == constant.ChannelTypeMidjourneyPlus {
+		return errors.New("midjourney plus channel test is not supported"), nil
 	}
-	if channel.Type == common.ChannelTypeSunoAPI {
+	if channel.Type == constant.ChannelTypeSunoAPI {
 		return errors.New("suno channel test is not supported"), nil
 	}
-	if channel.Type == common.ChannelTypeKling {
+	if channel.Type == constant.ChannelTypeKling {
 		return errors.New("kling channel test is not supported"), nil
 	}
-	if channel.Type == common.ChannelTypeJimeng {
+	if channel.Type == constant.ChannelTypeJimeng {
 		return errors.New("jimeng channel test is not supported"), nil
 	}
 	w := httptest.NewRecorder()
@@ -56,7 +56,7 @@ func testChannel(channel *model.Channel, testModel string) (err error, openAIErr
 		strings.HasPrefix(testModel, "m3e") || // m3e 系列模型
 		strings.Contains(testModel, "bge-") || // bge 系列模型
 		strings.Contains(testModel, "embed") ||
-		channel.Type == common.ChannelTypeMokaAI { // 其他 embedding 模型
+		channel.Type == constant.ChannelTypeMokaAI { // 其他 embedding 模型
 		requestPath = "/v1/embeddings" // 修改请求路径
 	}
 
@@ -102,7 +102,7 @@ func testChannel(channel *model.Channel, testModel string) (err error, openAIErr
 	}
 	testModel = info.UpstreamModelName
 
-	apiType, _ := constant.ChannelType2APIType(channel.Type)
+	apiType, _ := common.ChannelType2APIType(channel.Type)
 	adaptor := relay.GetAdaptor(apiType)
 	if adaptor == nil {
 		return fmt.Errorf("invalid api type: %d, adaptor is nil", apiType), nil
@@ -173,8 +173,19 @@ func testChannel(channel *model.Channel, testModel string) (err error, openAIErr
 	consumedTime := float64(milliseconds) / 1000.0
 	other := service.GenerateTextOtherInfo(c, info, priceData.ModelRatio, priceData.GroupRatioInfo.GroupRatio, priceData.CompletionRatio,
 		usage.PromptTokensDetails.CachedTokens, priceData.CacheRatio, priceData.ModelPrice, priceData.GroupRatioInfo.GroupSpecialRatio)
-	model.RecordConsumeLog(c, 1, channel.Id, usage.PromptTokens, usage.CompletionTokens, info.OriginModelName, "模型测试",
-		quota, "模型测试", 0, quota, int(consumedTime), false, info.UsingGroup, other)
+	model.RecordConsumeLog(c, 1, model.RecordConsumeLogParams{
+		ChannelId:        channel.Id,
+		PromptTokens:     usage.PromptTokens,
+		CompletionTokens: usage.CompletionTokens,
+		ModelName:        info.OriginModelName,
+		TokenName:        "模型测试",
+		Quota:            quota,
+		Content:          "模型测试",
+		UseTimeSeconds:   int(consumedTime),
+		IsStream:         false,
+		Group:            info.UsingGroup,
+		Other:            other,
+	})
 	common.SysLog(fmt.Sprintf("testing channel #%d, response: \n%s", channel.Id, string(respBody)))
 	return nil, nil
 }
@@ -202,7 +213,7 @@ func buildTestRequest(model string) *dto.GeneralOpenAIRequest {
 			testRequest.MaxTokens = 50
 		}
 	} else if strings.Contains(model, "gemini") {
-		testRequest.MaxTokens = 300
+		testRequest.MaxTokens = 3000
 	} else {
 		testRequest.MaxTokens = 10
 	}

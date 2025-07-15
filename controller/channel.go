@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"one-api/common"
+	"one-api/constant"
 	"one-api/model"
 	"strconv"
 	"strings"
@@ -125,7 +126,7 @@ func GetAllChannels(c *gin.Context) {
 			order = "id desc"
 		}
 
-		err := baseQuery.Order(order).Limit(pageSize).Offset((p-1)*pageSize).Omit("key").Find(&channelData).Error
+		err := baseQuery.Order(order).Limit(pageSize).Offset((p - 1) * pageSize).Omit("key").Find(&channelData).Error
 		if err != nil {
 			c.JSON(http.StatusOK, gin.H{"success": false, "message": err.Error()})
 			return
@@ -181,15 +182,15 @@ func FetchUpstreamModels(c *gin.Context) {
 		return
 	}
 
-	baseURL := common.ChannelBaseURLs[channel.Type]
+	baseURL := constant.ChannelBaseURLs[channel.Type]
 	if channel.GetBaseURL() != "" {
 		baseURL = channel.GetBaseURL()
 	}
 	url := fmt.Sprintf("%s/v1/models", baseURL)
 	switch channel.Type {
-	case common.ChannelTypeGemini:
+	case constant.ChannelTypeGemini:
 		url = fmt.Sprintf("%s/v1beta/openai/models", baseURL)
-	case common.ChannelTypeAli:
+	case constant.ChannelTypeAli:
 		url = fmt.Sprintf("%s/compatible-mode/v1/models", baseURL)
 	}
 	body, err := GetResponseBody("GET", url, channel, GetAuthHeader(channel.Key))
@@ -213,7 +214,7 @@ func FetchUpstreamModels(c *gin.Context) {
 	var ids []string
 	for _, model := range result.Data {
 		id := model.ID
-		if channel.Type == common.ChannelTypeGemini {
+		if channel.Type == constant.ChannelTypeGemini {
 			id = strings.TrimPrefix(id, "models/")
 		}
 		ids = append(ids, id)
@@ -227,7 +228,7 @@ func FetchUpstreamModels(c *gin.Context) {
 }
 
 func FixChannelsAbilities(c *gin.Context) {
-	count, err := model.FixAbility()
+	success, fails, err := model.FixAbility()
 	if err != nil {
 		c.JSON(http.StatusOK, gin.H{
 			"success": false,
@@ -238,7 +239,10 @@ func FixChannelsAbilities(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{
 		"success": true,
 		"message": "",
-		"data":    count,
+		"data": gin.H{
+			"success": success,
+			"fails":   fails,
+		},
 	})
 }
 
@@ -386,9 +390,17 @@ func AddChannel(c *gin.Context) {
 		})
 		return
 	}
+	err = channel.ValidateSettings()
+	if err != nil {
+		c.JSON(http.StatusOK, gin.H{
+			"success": false,
+			"message": "channel setting 格式错误：" + err.Error(),
+		})
+		return
+	}
 	channel.CreatedTime = common.GetTimestamp()
 	keys := strings.Split(channel.Key, "\n")
-	if channel.Type == common.ChannelTypeVertexAi {
+	if channel.Type == constant.ChannelTypeVertexAi {
 		if channel.Other == "" {
 			c.JSON(http.StatusOK, gin.H{
 				"success": false,
@@ -613,7 +625,15 @@ func UpdateChannel(c *gin.Context) {
 		})
 		return
 	}
-	if channel.Type == common.ChannelTypeVertexAi {
+	err = channel.ValidateSettings()
+	if err != nil {
+		c.JSON(http.StatusOK, gin.H{
+			"success": false,
+			"message": "channel setting 格式错误：" + err.Error(),
+		})
+		return
+	}
+	if channel.Type == constant.ChannelTypeVertexAi {
 		if channel.Other == "" {
 			c.JSON(http.StatusOK, gin.H{
 				"success": false,
@@ -668,7 +688,7 @@ func FetchModels(c *gin.Context) {
 
 	baseURL := req.BaseURL
 	if baseURL == "" {
-		baseURL = common.ChannelBaseURLs[req.Type]
+		baseURL = constant.ChannelBaseURLs[req.Type]
 	}
 
 	client := &http.Client{}
