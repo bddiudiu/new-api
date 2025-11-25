@@ -180,7 +180,7 @@ func AddToken(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{
 		"success": true,
 		"message": "",
-		"data":    cleanToken.Key,
+		"data":    cleanToken,
 	})
 	return
 }
