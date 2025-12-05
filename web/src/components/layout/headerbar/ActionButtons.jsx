@@ -20,6 +20,7 @@ For commercial licensing, please contact support@quantumnous.com
 import React from 'react';
 import NewYearButton from './NewYearButton';
 import NotificationButton from './NotificationButton';
+import SignInButton from './SignInButton';
 import ThemeToggle from './ThemeToggle';
 import LanguageSelector from './LanguageSelector';
 import UserArea from './UserArea';
@@ -43,6 +44,8 @@ const ActionButtons = ({
   return (
     <div className='flex items-center gap-2 md:gap-3'>
       <NewYearButton isNewYear={isNewYear} />
+
+      <SignInButton t={t} />
 
       <NotificationButton
         unreadCount={unreadCount}

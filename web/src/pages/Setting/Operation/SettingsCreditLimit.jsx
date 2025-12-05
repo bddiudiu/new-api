@@ -31,11 +31,25 @@ import {
 export default function SettingsCreditLimit(props) {
   const { t } = useTranslation();
   const [loading, setLoading] = useState(false);
+
+  // 定义需要处理的键列表
+  const inputKeys = [
+    'QuotaForNewUser',
+    'PreConsumedQuota',
+    'QuotaForInviter',
+    'QuotaForInvitee',
+    'QuotaForSign',
+    'SignInDays',
+    'quota_setting.enable_free_model_pre_consume',
+  ];
+
   const [inputs, setInputs] = useState({
     QuotaForNewUser: '',
     PreConsumedQuota: '',
     QuotaForInviter: '',
     QuotaForInvitee: '',
+    QuotaForSign: '',
+    SignInDays: '',
     'quota_setting.enable_free_model_pre_consume': true,
   });
   const refForm = useRef();
@@ -79,7 +93,7 @@ export default function SettingsCreditLimit(props) {
   useEffect(() => {
     const currentInputs = {};
     for (let key in props.options) {
-      if (Object.keys(inputs).includes(key)) {
+      if (inputKeys.includes(key)) {
         currentInputs[key] = props.options[key];
       }
     }
@@ -167,6 +181,46 @@ export default function SettingsCreditLimit(props) {
                 />
               </Col>
             </Row>
+          </Form.Section>
+          <Form.Section text={t('签到设置')}>
+            <Row gutter={16}>
+              <Col xs={24} sm={12} md={8} lg={8} xl={8}>
+                <Form.InputNumber
+                  label={t('签到奖励额度')}
+                  field={'QuotaForSign'}
+                  step={1}
+                  min={0}
+                  suffix={'Token'}
+                  extraText={t('设置为0则关闭签到功能')}
+                  placeholder={t('例如：10000')}
+                  onChange={(value) =>
+                    setInputs({
+                      ...inputs,
+                      QuotaForSign: String(value),
+                    })
+                  }
+                />
+              </Col>
+              <Col xs={24} sm={12} md={8} lg={8} xl={8}>
+                <Form.InputNumber
+                  label={t('签到有效天数')}
+                  field={'SignInDays'}
+                  step={1}
+                  min={1}
+                  suffix={t('天')}
+                  extraText={t('用户注册后多少天内可以签到')}
+                  placeholder={t('例如：31')}
+                  onChange={(value) =>
+                    setInputs({
+                      ...inputs,
+                      SignInDays: String(value),
+                    })
+                  }
+                />
+              </Col>
+            </Row>
+          </Form.Section>
+          <Form.Section text={t('其他设置')}>
             <Row>
               <Col>
                 <Form.Switch

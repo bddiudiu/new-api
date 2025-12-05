@@ -35,6 +35,8 @@ const OperationSetting = () => {
     PreConsumedQuota: 0,
     QuotaForInviter: 0,
     QuotaForInvitee: 0,
+    QuotaForSign: 0,
+    SignInDays: 31,
     'quota_setting.enable_free_model_pre_consume': true,
 
     /* 通用设置 */

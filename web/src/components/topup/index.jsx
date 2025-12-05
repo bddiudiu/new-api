@@ -35,6 +35,7 @@ import { StatusContext } from '../../context/Status';
 
 import RechargeCard from './RechargeCard';
 import InvitationCard from './InvitationCard';
+import SignIn from '../signin';
 import TransferModal from './modals/TransferModal';
 import PaymentConfirmModal from './modals/PaymentConfirmModal';
 import TopupHistoryModal from './modals/TopupHistoryModal';
@@ -706,7 +707,7 @@ const TopUp = () => {
           </div>
 
           {/* 右侧信息区域 */}
-          <div className='lg:col-span-5'>
+          <div className='lg:col-span-5 space-y-6'>
             <InvitationCard
               t={t}
               userState={userState}
@@ -715,6 +716,7 @@ const TopUp = () => {
               affLink={affLink}
               handleAffLinkClick={handleAffLinkClick}
             />
+            <SignIn />
           </div>
         </div>
       </div>

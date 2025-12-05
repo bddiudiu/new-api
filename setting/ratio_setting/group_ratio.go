@@ -38,9 +38,17 @@ type GroupRatioSetting struct {
 	GroupRatio              map[string]float64                      `json:"group_ratio"`
 	GroupGroupRatio         map[string]map[string]float64           `json:"group_group_ratio"`
 	GroupSpecialUsableGroup *types.RWMap[string, map[string]string] `json:"group_special_usable_group"`
+	GroupSignEnabled        map[string]bool                         `json:"group_sign_enabled"` // 各分组是否允许签到
 }
 
 var groupRatioSetting GroupRatioSetting
+
+var (
+	groupSignEnabled = map[string]bool{
+		"default": true,
+	}
+	groupSignEnabledMutex sync.RWMutex
+)
 
 func init() {
 	groupSpecialUsableGroup := types.NewRWMap[string, map[string]string]()
@@ -50,6 +58,7 @@ func init() {
 		GroupSpecialUsableGroup: groupSpecialUsableGroup,
 		GroupRatio:              groupRatio,
 		GroupGroupRatio:         GroupGroupRatio,
+		GroupSignEnabled:        groupSignEnabled,
 	}
 
 	config.GlobalConfig.Register("group_ratio_setting", &groupRatioSetting)
@@ -159,4 +168,37 @@ func CheckGroupRatio(jsonStr string) error {
 		}
 	}
 	return nil
+}
+
+// IsGroupSignEnabled 检查指定分组是否允许签到
+func IsGroupSignEnabled(groupName string) bool {
+	groupSignEnabledMutex.RLock()
+	defer groupSignEnabledMutex.RUnlock()
+
+	enabled, ok := groupSignEnabled[groupName]
+	if !ok {
+		return false // 未配置的分组默认不允许签到
+	}
+	return enabled
+}
+
+// GroupSignEnabled2JSONString 将签到配置转换为JSON字符串
+func GroupSignEnabled2JSONString() string {
+	groupSignEnabledMutex.RLock()
+	defer groupSignEnabledMutex.RUnlock()
+
+	jsonBytes, err := json.Marshal(groupSignEnabled)
+	if err != nil {
+		common.SysLog("error marshalling group sign enabled: " + err.Error())
+	}
+	return string(jsonBytes)
+}
+
+// UpdateGroupSignEnabledByJSONString 通过JSON字符串更新签到配置
+func UpdateGroupSignEnabledByJSONString(jsonStr string) error {
+	groupSignEnabledMutex.Lock()
+	defer groupSignEnabledMutex.Unlock()
+
+	groupSignEnabled = make(map[string]bool)
+	return json.Unmarshal([]byte(jsonStr), &groupSignEnabled)
 }

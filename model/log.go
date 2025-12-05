@@ -48,6 +48,7 @@ const (
 	LogTypeSystem  = 4
 	LogTypeError   = 5
 	LogTypeRefund  = 6
+	LogTypeSign    = 7 // 签到
 )
 
 func formatUserLogs(logs []*Log) {

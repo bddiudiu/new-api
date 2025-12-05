@@ -32,6 +32,18 @@ import { useTranslation } from 'react-i18next';
 export default function GroupRatioSettings(props) {
   const { t } = useTranslation();
   const [loading, setLoading] = useState(false);
+
+  // 定义需要处理的键列表
+  const inputKeys = [
+    'GroupRatio',
+    'UserUsableGroups',
+    'GroupGroupRatio',
+    'group_ratio_setting.group_special_usable_group',
+    'AutoGroups',
+    'DefaultUseAutoGroup',
+    'GroupSignEnabled',
+  ];
+
   const [inputs, setInputs] = useState({
     GroupRatio: '',
     UserUsableGroups: '',
@@ -39,6 +51,7 @@ export default function GroupRatioSettings(props) {
     'group_ratio_setting.group_special_usable_group': '',
     AutoGroups: '',
     DefaultUseAutoGroup: false,
+    GroupSignEnabled: '',
   });
   const refForm = useRef();
   const [inputsRow, setInputsRow] = useState(inputs);
@@ -100,7 +113,7 @@ export default function GroupRatioSettings(props) {
   useEffect(() => {
     const currentInputs = {};
     for (let key in props.options) {
-      if (Object.keys(inputs).includes(key)) {
+      if (inputKeys.includes(key)) {
         currentInputs[key] = props.options[key];
       }
     }
@@ -257,6 +270,30 @@ export default function GroupRatioSettings(props) {
               field={'DefaultUseAutoGroup'}
               onChange={(value) =>
                 setInputs({ ...inputs, DefaultUseAutoGroup: value })
+              }
+            />
+          </Col>
+        </Row>
+        <Row gutter={16}>
+          <Col xs={24} sm={16}>
+            <Form.TextArea
+              label={t('分组签到开关')}
+              placeholder={t('为一个 JSON 文本，键为分组名称，值为布尔值')}
+              extraText={t(
+                '分组签到开关设置，设置各分组是否允许签到，格式为 JSON 字符串，例如：{"default": true, "vip": false}，表示 default 分组允许签到，vip 分组不允许签到',
+              )}
+              field={'GroupSignEnabled'}
+              autosize={{ minRows: 4, maxRows: 8 }}
+              trigger='blur'
+              stopValidateWithError
+              rules={[
+                {
+                  validator: (rule, value) => verifyJSON(value),
+                  message: t('不是合法的 JSON 字符串'),
+                },
+              ]}
+              onChange={(value) =>
+                setInputs({ ...inputs, GroupSignEnabled: value })
               }
             />
           </Col>
