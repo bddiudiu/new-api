@@ -49,6 +49,69 @@ func HasCheckedInToday(userId int) (bool, error) {
 	return count > 0, err
 }
 
+// GetUserFirstCheckinDate 获取用户首次签到日期
+func GetUserFirstCheckinDate(userId int) (string, error) {
+	var checkin Checkin
+	err := DB.Where("user_id = ?", userId).
+		Order("checkin_date ASC").
+		First(&checkin).Error
+	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return "", nil // 用户从未签到过
+		}
+		return "", err
+	}
+	return checkin.CheckinDate, nil
+}
+
+// GetUserCheckinDaysInfo 获取用户签到天数相关信息
+// 返回：首次签到日期、已签到天数、剩余可签到天数（-1 表示不限制）
+func GetUserCheckinDaysInfo(userId int, newUserDaysLimit int) (firstDate string, usedDays int, remainingDays int, err error) {
+	firstDate, err = GetUserFirstCheckinDate(userId)
+	if err != nil {
+		return "", 0, 0, err
+	}
+
+	// 获取用户总签到天数
+	var totalCheckins int64
+	DB.Model(&Checkin{}).Where("user_id = ?", userId).Count(&totalCheckins)
+	usedDays = int(totalCheckins)
+
+	// 如果不限制，返回 -1
+	if newUserDaysLimit <= 0 {
+		return firstDate, usedDays, -1, nil
+	}
+
+	// 计算剩余可签到天数
+	remainingDays = newUserDaysLimit - usedDays
+	if remainingDays < 0 {
+		remainingDays = 0
+	}
+
+	return firstDate, usedDays, remainingDays, nil
+}
+
+// CanUserCheckin 检查用户是否可以签到
+// 返回：是否可以签到、剩余可签到天数（-1 表示不限制）、错误信息
+func CanUserCheckin(userId int, newUserDaysLimit int) (bool, int, error) {
+	// 如果不限制天数，直接返回可以签到
+	if newUserDaysLimit <= 0 {
+		return true, -1, nil
+	}
+
+	_, usedDays, remainingDays, err := GetUserCheckinDaysInfo(userId, newUserDaysLimit)
+	if err != nil {
+		return false, 0, err
+	}
+
+	// 检查是否还有剩余天数
+	if usedDays >= newUserDaysLimit {
+		return false, 0, nil
+	}
+
+	return true, remainingDays, nil
+}
+
 // UserCheckin 执行用户签到
 // MySQL 和 PostgreSQL 使用事务保证原子性
 // SQLite 不支持嵌套事务，使用顺序操作 + 手动回滚
@@ -56,6 +119,17 @@ func UserCheckin(userId int) (*Checkin, error) {
 	setting := operation_setting.GetCheckinSetting()
 	if !setting.Enabled {
 		return nil, errors.New("签到功能未启用")
+	}
+
+	// 检查签到天数限制
+	if setting.NewUserDays > 0 {
+		canCheckin, _, err := CanUserCheckin(userId, setting.NewUserDays)
+		if err != nil {
+			return nil, err
+		}
+		if !canCheckin {
+			return nil, errors.New("您的签到次数已用完")
+		}
 	}
 
 	// 检查今天是否已签到
@@ -142,6 +216,8 @@ func userCheckinWithoutTransaction(checkin *Checkin, userId int, quotaAwarded in
 
 // GetUserCheckinStats 获取用户签到统计信息
 func GetUserCheckinStats(userId int, month string) (map[string]interface{}, error) {
+	setting := operation_setting.GetCheckinSetting()
+
 	// 获取指定月份的所有签到记录
 	startDate := month + "-01"
 	endDate := month + "-31"
@@ -169,11 +245,22 @@ func GetUserCheckinStats(userId int, month string) (map[string]interface{}, erro
 	DB.Model(&Checkin{}).Where("user_id = ?", userId).Count(&totalCheckins)
 	DB.Model(&Checkin{}).Where("user_id = ?", userId).Select("COALESCE(SUM(quota_awarded), 0)").Scan(&totalQuota)
 
+	// 计算剩余可签到天数
+	remainingDays := -1 // -1 表示不限制
+	if setting.NewUserDays > 0 {
+		remainingDays = setting.NewUserDays - int(totalCheckins)
+		if remainingDays < 0 {
+			remainingDays = 0
+		}
+	}
+
 	return map[string]interface{}{
-		"total_quota":      totalQuota,      // 所有时间累计获得的额度
-		"total_checkins":   totalCheckins,   // 所有时间累计签到次数
-		"checkin_count":    len(records),    // 本月签到次数
-		"checked_in_today": hasCheckedToday, // 今天是否已签到
-		"records":          checkinRecords,  // 本月签到记录详情（不含id和user_id）
+		"total_quota":      totalQuota,          // 所有时间累计获得的额度
+		"total_checkins":   totalCheckins,       // 所有时间累计签到次数
+		"checkin_count":    len(records),        // 本月签到次数
+		"checked_in_today": hasCheckedToday,     // 今天是否已签到
+		"records":          checkinRecords,      // 本月签到记录详情（不含id和user_id）
+		"new_user_days":    setting.NewUserDays, // 新用户可签到天数限制，0 表示不限制
+		"remaining_days":   remainingDays,       // 剩余可签到天数，-1 表示不限制
 	}, nil
 }

@@ -46,12 +46,15 @@ const CheckinCalendar = ({ t, status, turnstileEnabled, turnstileSiteKey }) => {
   const [turnstileWidgetKey, setTurnstileWidgetKey] = useState(0);
   const [checkinData, setCheckinData] = useState({
     enabled: false,
+    new_user_days: 0,
     stats: {
       checked_in_today: false,
       total_checkins: 0,
       total_quota: 0,
       checkin_count: 0,
       records: [],
+      new_user_days: 0,
+      remaining_days: -1,
     },
   });
   const [currentMonth, setCurrentMonth] = useState(
@@ -80,6 +83,20 @@ const CheckinCalendar = ({ t, status, turnstileEnabled, turnstileSiteKey }) => {
       0,
     );
   }, [checkinData.stats?.records]);
+
+  // 判断签到次数是否已用完
+  const isCheckinExhausted = useMemo(() => {
+    const remainingDays = checkinData.stats?.remaining_days;
+    // remaining_days === 0 表示签到次数已用完
+    // remaining_days === -1 表示不限制
+    return remainingDays === 0;
+  }, [checkinData.stats?.remaining_days]);
+
+  // 判断是否有签到天数限制
+  const hasCheckinLimit = useMemo(() => {
+    const newUserDays = checkinData.stats?.new_user_days || 0;
+    return newUserDays > 0;
+  }, [checkinData.stats?.new_user_days]);
 
   // 获取签到状态
   const fetchCheckinStatus = async (month) => {
@@ -261,11 +278,21 @@ const CheckinCalendar = ({ t, status, turnstileEnabled, turnstileSiteKey }) => {
             <div className='text-xs text-gray-500 dark:text-gray-400'>
               {!initialLoaded
                 ? t('正在加载签到状态...')
-                : checkinData.stats?.checked_in_today
-                  ? t('今日已签到，累计签到') +
+                : isCheckinExhausted
+                  ? t('签到次数已用完，累计签到') +
                     ` ${checkinData.stats?.total_checkins || 0} ` +
                     t('天')
-                  : t('每日签到可获得随机额度奖励')}
+                  : checkinData.stats?.checked_in_today
+                    ? t('今日已签到，累计签到') +
+                      ` ${checkinData.stats?.total_checkins || 0} ` +
+                      t('天') +
+                      (hasCheckinLimit
+                        ? `，${t('剩余')} ${checkinData.stats?.remaining_days || 0} ${t('天')}`
+                        : '')
+                    : hasCheckinLimit
+                      ? t('每日签到可获得随机额度奖励') +
+                        `（${t('剩余')} ${checkinData.stats?.remaining_days || 0} ${t('天')}）`
+                      : t('每日签到可获得随机额度奖励')}
             </div>
           </div>
         </div>
@@ -275,21 +302,23 @@ const CheckinCalendar = ({ t, status, turnstileEnabled, turnstileSiteKey }) => {
           icon={<Gift size={16} />}
           onClick={() => doCheckin()}
           loading={checkinLoading || !initialLoaded}
-          disabled={!initialLoaded || checkinData.stats?.checked_in_today}
+          disabled={!initialLoaded || checkinData.stats?.checked_in_today || isCheckinExhausted}
           className='!bg-green-600 hover:!bg-green-700'
         >
           {!initialLoaded
             ? t('加载中...')
-            : checkinData.stats?.checked_in_today
-              ? t('今日已签到')
-              : t('立即签到')}
+            : isCheckinExhausted
+              ? t('签到次数已用完')
+              : checkinData.stats?.checked_in_today
+                ? t('今日已签到')
+                : t('立即签到')}
         </Button>
       </div>
 
       {/* 可折叠内容 */}
       <Collapsible isOpen={isCollapsed === false} keepDOM>
         {/* 签到统计 */}
-        <div className='grid grid-cols-3 gap-3 mb-4 mt-4'>
+        <div className={`grid ${hasCheckinLimit ? 'grid-cols-4' : 'grid-cols-3'} gap-3 mb-4 mt-4`}>
           <div className='text-center p-2.5 bg-slate-50 dark:bg-slate-800 rounded-lg'>
             <div className='text-xl font-bold text-green-600'>
               {checkinData.stats?.total_checkins || 0}
@@ -308,6 +337,14 @@ const CheckinCalendar = ({ t, status, turnstileEnabled, turnstileSiteKey }) => {
             </div>
             <div className='text-xs text-gray-500'>{t('累计获得')}</div>
           </div>
+          {hasCheckinLimit && (
+            <div className='text-center p-2.5 bg-slate-50 dark:bg-slate-800 rounded-lg'>
+              <div className={`text-xl font-bold ${isCheckinExhausted ? 'text-red-600' : 'text-purple-600'}`}>
+                {checkinData.stats?.remaining_days || 0}
+              </div>
+              <div className='text-xs text-gray-500'>{t('剩余天数')}</div>
+            </div>
+          )}
         </div>
 
         {/* 签到日历 - 使用更紧凑的样式 */}

@@ -35,6 +35,7 @@ export default function SettingsCheckin(props) {
     'checkin_setting.enabled': false,
     'checkin_setting.min_quota': 1000,
     'checkin_setting.max_quota': 10000,
+    'checkin_setting.new_user_days': 0,
   });
   const refForm = useRef();
   const [inputsRow, setInputsRow] = useState(inputs);
@@ -108,7 +109,7 @@ export default function SettingsCheckin(props) {
               {t('签到功能允许用户每日签到获取随机额度奖励')}
             </Typography.Text>
             <Row gutter={16}>
-              <Col xs={24} sm={12} md={8} lg={8} xl={8}>
+              <Col xs={24} sm={12} md={6} lg={6} xl={6}>
                 <Form.Switch
                   field={'checkin_setting.enabled'}
                   label={t('启用签到功能')}
@@ -118,7 +119,7 @@ export default function SettingsCheckin(props) {
                   onChange={handleFieldChange('checkin_setting.enabled')}
                 />
               </Col>
-              <Col xs={24} sm={12} md={8} lg={8} xl={8}>
+              <Col xs={24} sm={12} md={6} lg={6} xl={6}>
                 <Form.InputNumber
                   field={'checkin_setting.min_quota'}
                   label={t('签到最小额度')}
@@ -128,12 +129,23 @@ export default function SettingsCheckin(props) {
                   disabled={!inputs['checkin_setting.enabled']}
                 />
               </Col>
-              <Col xs={24} sm={12} md={8} lg={8} xl={8}>
+              <Col xs={24} sm={12} md={6} lg={6} xl={6}>
                 <Form.InputNumber
                   field={'checkin_setting.max_quota'}
                   label={t('签到最大额度')}
                   placeholder={t('签到奖励的最大额度')}
                   onChange={handleFieldChange('checkin_setting.max_quota')}
+                  min={0}
+                  disabled={!inputs['checkin_setting.enabled']}
+                />
+              </Col>
+              <Col xs={24} sm={12} md={6} lg={6} xl={6}>
+                <Form.InputNumber
+                  field={'checkin_setting.new_user_days'}
+                  label={t('新用户可签到天数')}
+                  placeholder={t('0 表示不限制')}
+                  extraText={t('限制每个用户最多可签到的天数，0 表示不限制')}
+                  onChange={handleFieldChange('checkin_setting.new_user_days')}
                   min={0}
                   disabled={!inputs['checkin_setting.enabled']}
                 />
