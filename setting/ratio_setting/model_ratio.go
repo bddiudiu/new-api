@@ -7,7 +7,6 @@ import (
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/setting/operation_setting"
-	"github.com/QuantumNous/new-api/setting/reasoning"
 )
 
 // from songquanpeng/one-api
@@ -312,6 +311,10 @@ var defaultAudioCompletionRatio = map[string]float64{
 	"gpt-4o-realtime":      2,
 	"gpt-4o-mini-realtime": 2,
 	"gpt-4o-mini-tts":      1,
+	"tts-1":                0,
+	"tts-1-hd":             0,
+	"tts-1-1106":           0,
+	"tts-1-hd-1106":        0,
 }
 
 var (
@@ -657,7 +660,7 @@ func GetAudioRatio(name string) float64 {
 	if ratio, ok := audioRatioMap[name]; ok {
 		return ratio
 	}
-	return 20
+	return 1
 }
 
 func GetAudioCompletionRatio(name string) float64 {
@@ -668,7 +671,23 @@ func GetAudioCompletionRatio(name string) float64 {
 
 		return ratio
 	}
-	return 2
+	return 1
+}
+
+func ContainsAudioRatio(name string) bool {
+	audioRatioMapMutex.RLock()
+	defer audioRatioMapMutex.RUnlock()
+	name = FormatMatchingModelName(name)
+	_, ok := audioRatioMap[name]
+	return ok
+}
+
+func ContainsAudioCompletionRatio(name string) bool {
+	audioCompletionRatioMapMutex.RLock()
+	defer audioCompletionRatioMapMutex.RUnlock()
+	name = FormatMatchingModelName(name)
+	_, ok := audioCompletionRatioMap[name]
+	return ok
 }
 
 func ModelRatio2JSONString() string {
@@ -746,16 +765,6 @@ func UpdateAudioRatioByJSONString(jsonStr string) error {
 	return nil
 }
 
-func GetAudioRatioCopy() map[string]float64 {
-	audioRatioMapMutex.RLock()
-	defer audioRatioMapMutex.RUnlock()
-	copyMap := make(map[string]float64, len(audioRatioMap))
-	for k, v := range audioRatioMap {
-		copyMap[k] = v
-	}
-	return copyMap
-}
-
 func AudioCompletionRatio2JSONString() string {
 	audioCompletionRatioMapMutex.RLock()
 	defer audioCompletionRatioMapMutex.RUnlock()
@@ -776,16 +785,6 @@ func UpdateAudioCompletionRatioByJSONString(jsonStr string) error {
 	audioCompletionRatioMapMutex.Unlock()
 	InvalidateExposedDataCache()
 	return nil
-}
-
-func GetAudioCompletionRatioCopy() map[string]float64 {
-	audioCompletionRatioMapMutex.RLock()
-	defer audioCompletionRatioMapMutex.RUnlock()
-	copyMap := make(map[string]float64, len(audioCompletionRatioMap))
-	for k, v := range audioCompletionRatioMap {
-		copyMap[k] = v
-	}
-	return copyMap
 }
 
 func GetModelRatioCopy() map[string]float64 {
@@ -827,10 +826,6 @@ func FormatMatchingModelName(name string) string {
 		name = handleThinkingBudgetModel(name, "gemini-2.5-flash", "gemini-2.5-flash-thinking-*")
 	} else if strings.HasPrefix(name, "gemini-2.5-pro") {
 		name = handleThinkingBudgetModel(name, "gemini-2.5-pro", "gemini-2.5-pro-thinking-*")
-	}
-
-	if base, _, ok := reasoning.TrimEffortSuffix(name); ok {
-		name = base
 	}
 
 	if strings.HasPrefix(name, "gpt-4-gizmo") {
