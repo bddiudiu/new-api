@@ -81,6 +81,7 @@ func TextHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *types
 		!info.ChannelSetting.PassThroughBodyEnabled &&
 		service.ShouldChatCompletionsUseResponsesGlobal(info.ChannelId, info.ChannelType, info.OriginModelName) {
 		applySystemPromptIfNeeded(c, info, request)
+		applyToolsIfNeeded(info, request)
 		usage, newApiErr := chatCompletionsViaResponses(c, info, adaptor, request)
 		if newApiErr != nil {
 			return newApiErr
@@ -153,6 +154,24 @@ func TextHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *types
 							break
 						}
 					}
+				}
+			}
+		}
+
+		// Tools 注入逻辑
+		if info.ChannelSetting.Tools != "" {
+			request, ok := convertedRequest.(*dto.GeneralOpenAIRequest)
+			if ok {
+				var channelTools []dto.ToolCallRequest
+				if err := common.Unmarshal([]byte(info.ChannelSetting.Tools), &channelTools); err == nil && len(channelTools) > 0 {
+					if len(request.Tools) == 0 {
+						// 用户未提供 tools，使用渠道配置
+						request.Tools = channelTools
+					} else if info.ChannelSetting.ToolsAppend {
+						// 用户已提供 tools，且开启追加模式，将渠道配置追加到后面
+						request.Tools = append(request.Tools, channelTools...)
+					}
+					// 否则：用户已提供 tools，且未开启追加模式，保持用户配置不变
 				}
 			}
 		}

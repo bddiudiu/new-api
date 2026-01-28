@@ -98,6 +98,22 @@ func ClaudeHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *typ
 		}
 	}
 
+	// Tools 注入逻辑
+	//if info.ChannelSetting.Tools != "" {
+	//	var channelTools []any
+	//	if err := common.Unmarshal([]byte(info.ChannelSetting.Tools), &channelTools); err == nil && len(channelTools) > 0 {
+	//		existingTools := request.GetTools()
+	//		if len(existingTools) == 0 {
+	//			// 用户未提供 tools，使用渠道配置
+	//			request.Tools = channelTools
+	//		} else if info.ChannelSetting.ToolsAppend {
+	//			// 用户已提供 tools，且开启追加模式，将渠道配置追加到后面
+	//			request.Tools = append(existingTools, channelTools...)
+	//		}
+	//		// 否则：用户已提供 tools，且未开启追加模式，保持用户配置不变
+	//	}
+	//}
+
 	var requestBody io.Reader
 	if model_setting.GetGlobalSettings().PassThroughRequestEnabled || info.ChannelSetting.PassThroughBodyEnabled {
 		body, err := common.GetRequestBody(c)
