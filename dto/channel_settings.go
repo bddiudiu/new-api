@@ -7,6 +7,8 @@ type ChannelSettings struct {
 	PassThroughBodyEnabled bool   `json:"pass_through_body_enabled,omitempty"`
 	SystemPrompt           string `json:"system_prompt,omitempty"`
 	SystemPromptOverride   bool   `json:"system_prompt_override,omitempty"`
+	Tools                  string `json:"tools,omitempty"`        // JSON 字符串格式的 tools 数组
+	ToolsAppend            bool   `json:"tools_append,omitempty"` // 是否追加到用户 tools
 }
 
 type VertexKeyType string
