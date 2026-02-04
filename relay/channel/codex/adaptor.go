@@ -91,27 +91,6 @@ func (a *Adaptor) ConvertOpenAIResponsesRequest(c *gin.Context, info *relaycommo
 		}
 	}
 
-	// Tools 注入逻辑
-	//if info != nil && info.ChannelSetting.Tools != "" {
-	//	var channelTools []map[string]any
-	//	if err := common.Unmarshal([]byte(info.ChannelSetting.Tools), &channelTools); err == nil && len(channelTools) > 0 {
-	//		existingTools := request.GetToolsMap()
-	//		if len(existingTools) == 0 {
-	//			// 用户未提供 tools，使用渠道配置
-	//			if b, err := common.Marshal(channelTools); err == nil {
-	//				request.Tools = b
-	//			}
-	//		} else if info.ChannelSetting.ToolsAppend {
-	//			// 用户已提供 tools，且开启追加模式，将渠道配置追加到后面
-	//			mergedTools := append(existingTools, channelTools...)
-	//			if b, err := common.Marshal(mergedTools); err == nil {
-	//				request.Tools = b
-	//			}
-	//		}
-	//		// 否则：用户已提供 tools，且未开启追加模式，保持用户配置不变
-	//	}
-	//}
-
 	if isCompact {
 		return request, nil
 	}
