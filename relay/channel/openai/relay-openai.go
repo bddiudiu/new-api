@@ -1,6 +1,7 @@
 package openai
 
 import (
+	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
@@ -122,6 +123,7 @@ func OaiStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Re
 	var streamItems []string // store stream items
 	var lastStreamData string
 	var secondLastStreamData string // 存储倒数第二个stream data，用于音频模型
+	var accumulatedToolCalls = make(map[int]*dto.ToolCallResponse)
 
 	// 检查是否为音频模型
 	isAudioModel := strings.Contains(strings.ToLower(model), "audio")
@@ -134,6 +136,46 @@ func OaiStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Re
 			}
 		}
 		if len(data) > 0 {
+			// 累积 tool_calls 用于 metainfo
+			if strings.Contains(data, "tool_calls") {
+				var streamResponse dto.ChatCompletionsStreamResponse
+				if err := common.UnmarshalJsonStr(data, &streamResponse); err == nil {
+					for _, choice := range streamResponse.Choices {
+						for i, tc := range choice.Delta.ToolCalls {
+							// 优先使用 Index，其次使用在 choice 内的位置
+							idx := i
+							if tc.Index != nil {
+								idx = *tc.Index
+							}
+							if existing, ok := accumulatedToolCalls[idx]; ok {
+								// 累积 arguments
+								existing.Function.Arguments += tc.Function.Arguments
+								// 更新非空字段
+								if tc.Function.Name != "" {
+									existing.Function.Name = tc.Function.Name
+								}
+								if tc.ID != "" {
+									existing.ID = tc.ID
+								}
+								if tc.Type != nil {
+									existing.Type = tc.Type
+								}
+							} else {
+								newTC := dto.ToolCallResponse{
+									ID:   tc.ID,
+									Type: tc.Type,
+									Function: dto.FunctionResponse{
+										Name:      tc.Function.Name,
+										Arguments: tc.Function.Arguments,
+									},
+								}
+								accumulatedToolCalls[idx] = &newTC
+							}
+						}
+					}
+				}
+			}
+
 			// 对音频模型，保存倒数第二个stream data
 			if isAudioModel && lastStreamData != "" {
 				secondLastStreamData = lastStreamData
@@ -188,7 +230,7 @@ func OaiStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Re
 
 	applyUsagePostProcessing(info, usage, common.StringToByteSlice(lastStreamData))
 
-	HandleFinalResponse(c, info, lastStreamData, responseId, createAt, model, systemFingerprint, usage, containStreamUsage)
+	HandleFinalResponse(c, info, lastStreamData, responseId, createAt, model, systemFingerprint, usage, containStreamUsage, accumulatedToolCalls)
 
 	return usage, nil
 }
@@ -262,13 +304,42 @@ func OpenaiHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Respo
 
 	switch info.RelayFormat {
 	case types.RelayFormatOpenAI:
-		if usageModified {
+		// 注入 metainfo: 将 tool_calls 复制到 message.metainfo 节点
+		hasToolCalls := false
+		for i := range simpleResponse.Choices {
+			if len(simpleResponse.Choices[i].Message.ToolCalls) > 0 {
+				var toolCalls []dto.ToolCallResponse
+				if err := json.Unmarshal(simpleResponse.Choices[i].Message.ToolCalls, &toolCalls); err == nil && len(toolCalls) > 0 {
+					simpleResponse.Choices[i].Message.MetaInfo = &dto.MetaInfo{ToolCalls: toolCalls}
+					hasToolCalls = true
+				}
+			}
+		}
+
+		if usageModified || hasToolCalls {
 			var bodyMap map[string]interface{}
 			err = common.Unmarshal(responseBody, &bodyMap)
 			if err != nil {
 				return nil, types.NewOpenAIError(err, types.ErrorCodeBadResponseBody, http.StatusInternalServerError)
 			}
-			bodyMap["usage"] = simpleResponse.Usage
+			if usageModified {
+				bodyMap["usage"] = simpleResponse.Usage
+			}
+			if hasToolCalls {
+				if choices, ok := bodyMap["choices"].([]interface{}); ok {
+					for _, choice := range choices {
+						if choiceMap, ok := choice.(map[string]interface{}); ok {
+							if msg, ok := choiceMap["message"].(map[string]interface{}); ok {
+								if tc, ok := msg["tool_calls"]; ok && tc != nil {
+									msg["metainfo"] = map[string]interface{}{
+										"tool_calls": tc,
+									}
+								}
+							}
+						}
+					}
+				}
+			}
 			responseBody, _ = common.Marshal(bodyMap)
 		}
 		if forceFormat {
