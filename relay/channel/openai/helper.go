@@ -216,24 +216,15 @@ func HandleFinalResponse(c *gin.Context, info *relaycommon.RelayInfo, lastStream
 				toolCallsList = append(toolCallsList, tc)
 			}
 
+			// 简化的顶层 metainfo 格式
 			metaInfoResponse := &dto.ChatCompletionsStreamResponse{
-				Type:    "meta.info",
 				Id:      responseId,
-				Object:  "chat.completion.chunk",
+				Type:    "meta.info",
 				Created: createAt,
-				Model:   model,
-				Choices: []dto.ChatCompletionsStreamResponseChoice{
-					{
-						Index: 0,
-						Delta: dto.ChatCompletionsStreamResponseChoiceDelta{
-							MetaInfo: &dto.MetaInfo{
-								ToolCalls: toolCallsList,
-							},
-						},
-					},
+				MetaInfo: &dto.MetaInfo{
+					ToolCalls: toolCallsList,
 				},
 			}
-			metaInfoResponse.SetSystemFingerprint(systemFingerprint)
 			helper.ObjectData(c, metaInfoResponse)
 		}
 

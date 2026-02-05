@@ -147,12 +147,13 @@ type MetaInfo struct {
 type ChatCompletionsStreamResponse struct {
 	Type              string                                `json:"type,omitempty"`
 	Id                string                                `json:"id"`
-	Object            string                                `json:"object"`
+	Object            string                                `json:"object,omitempty"`
 	Created           int64                                 `json:"created"`
-	Model             string                                `json:"model"`
-	SystemFingerprint *string                               `json:"system_fingerprint"`
-	Choices           []ChatCompletionsStreamResponseChoice `json:"choices"`
-	Usage             *Usage                                `json:"usage"`
+	Model             string                                `json:"model,omitempty"`
+	SystemFingerprint *string                               `json:"system_fingerprint,omitempty"`
+	Choices           []ChatCompletionsStreamResponseChoice `json:"choices,omitempty"`
+	Usage             *Usage                                `json:"usage,omitempty"`
+	MetaInfo          *MetaInfo                             `json:"metainfo,omitempty"`
 }
 
 func (c *ChatCompletionsStreamResponse) IsFinished() bool {
