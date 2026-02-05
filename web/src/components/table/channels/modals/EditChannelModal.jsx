@@ -2018,171 +2018,180 @@ const EditChannelModal = (props) => {
                           autoComplete='new-password'
                           onChange={(value) => handleInputChange('key', value)}
                           disabled={isIonetLocked}
-                        extraText={
-                          <div className='flex items-center gap-2 flex-wrap'>
-                            {isEdit &&
-                              isMultiKeyChannel &&
-                              keyMode === 'append' && (
-                                <Text type='warning' size='small'>
-                                  {t(
-                                    '追加模式：新密钥将添加到现有密钥列表的末尾',
-                                  )}
-                                </Text>
+                          extraText={
+                            <div className='flex items-center gap-2 flex-wrap'>
+                              {isEdit &&
+                                isMultiKeyChannel &&
+                                keyMode === 'append' && (
+                                  <Text type='warning' size='small'>
+                                    {t(
+                                      '追加模式：新密钥将添加到现有密钥列表的末尾',
+                                    )}
+                                  </Text>
+                                )}
+                              {isEdit && (
+                                <Button
+                                  size='small'
+                                  type='primary'
+                                  theme='outline'
+                                  onClick={handleShow2FAModal}
+                                >
+                                  {t('查看密钥')}
+                                </Button>
                               )}
-                            {isEdit && (
-                              <Button
-                                size='small'
-                                type='primary'
-                                theme='outline'
-                                onClick={handleShow2FAModal}
-                              >
-                                {t('查看密钥')}
-                              </Button>
-                            )}
-                            {batchExtra}
-                          </div>
-                        }
-                        showClear
-                      />
-                    )
-                  ) : (
-                    <>
-                      {inputs.type === 57 ? (
-                        <>
-                          <Form.TextArea
-                            field='key'
-                            label={
-                              isEdit
-                                ? t('密钥（编辑模式下，保存的密钥不会显示）')
-                                : t('密钥')
-                            }
-                            placeholder={t(
-                              '请输入 JSON 格式的 OAuth 凭据，例如：\n{\n  "access_token": "...",\n  "account_id": "..." \n}',
-                            )}
-                            rules={
-                              isEdit
-                                ? []
-                                : [{ required: true, message: t('请输入密钥') }]
-                            }
-                            autoComplete='new-password'
-                            onChange={(value) => handleInputChange('key', value)}
-                            disabled={isIonetLocked}
-                            extraText={
-                              <div className='flex flex-col gap-2'>
-                                <Text type='tertiary' size='small'>
-                                  {t(
-                                    '仅支持 JSON 对象，必须包含 access_token 与 account_id',
-                                  )}
-                                </Text>
+                              {batchExtra}
+                            </div>
+                          }
+                          showClear
+                        />
+                      )
+                    ) : (
+                      <>
+                        {inputs.type === 57 ? (
+                          <>
+                            <Form.TextArea
+                              field='key'
+                              label={
+                                isEdit
+                                  ? t('密钥（编辑模式下，保存的密钥不会显示）')
+                                  : t('密钥')
+                              }
+                              placeholder={t(
+                                '请输入 JSON 格式的 OAuth 凭据，例如：\n{\n  "access_token": "...",\n  "account_id": "..." \n}',
+                              )}
+                              rules={
+                                isEdit
+                                  ? []
+                                  : [
+                                      {
+                                        required: true,
+                                        message: t('请输入密钥'),
+                                      },
+                                    ]
+                              }
+                              autoComplete='new-password'
+                              onChange={(value) =>
+                                handleInputChange('key', value)
+                              }
+                              disabled={isIonetLocked}
+                              extraText={
+                                <div className='flex flex-col gap-2'>
+                                  <Text type='tertiary' size='small'>
+                                    {t(
+                                      '仅支持 JSON 对象，必须包含 access_token 与 account_id',
+                                    )}
+                                  </Text>
 
-                                <Space wrap spacing='tight'>
+                                  <Space wrap spacing='tight'>
+                                    <Button
+                                      size='small'
+                                      type='primary'
+                                      theme='outline'
+                                      onClick={() =>
+                                        setCodexOAuthModalVisible(true)
+                                      }
+                                      disabled={isIonetLocked}
+                                    >
+                                      {t('Codex 授权')}
+                                    </Button>
+                                    {isEdit && (
+                                      <Button
+                                        size='small'
+                                        type='primary'
+                                        theme='outline'
+                                        onClick={handleRefreshCodexCredential}
+                                        loading={codexCredentialRefreshing}
+                                        disabled={isIonetLocked}
+                                      >
+                                        {t('刷新凭证')}
+                                      </Button>
+                                    )}
+                                    <Button
+                                      size='small'
+                                      type='primary'
+                                      theme='outline'
+                                      onClick={() => formatJsonField('key')}
+                                      disabled={isIonetLocked}
+                                    >
+                                      {t('格式化')}
+                                    </Button>
+                                    {isEdit && (
+                                      <Button
+                                        size='small'
+                                        type='primary'
+                                        theme='outline'
+                                        onClick={handleShow2FAModal}
+                                        disabled={isIonetLocked}
+                                      >
+                                        {t('查看密钥')}
+                                      </Button>
+                                    )}
+                                    {batchExtra}
+                                  </Space>
+                                </div>
+                              }
+                              autosize
+                              showClear
+                            />
+
+                            <CodexOAuthModal
+                              visible={codexOAuthModalVisible}
+                              onCancel={() => setCodexOAuthModalVisible(false)}
+                              onSuccess={handleCodexOAuthGenerated}
+                            />
+                          </>
+                        ) : inputs.type === 41 &&
+                          (inputs.vertex_key_type || 'json') === 'json' ? (
+                          <>
+                            {!batch && (
+                              <div className='flex items-center justify-between mb-3'>
+                                <Text className='text-sm font-medium'>
+                                  {t('密钥输入方式')}
+                                </Text>
+                                <Space>
                                   <Button
                                     size='small'
-                                    type='primary'
-                                    theme='outline'
-                                    onClick={() =>
-                                      setCodexOAuthModalVisible(true)
+                                    type={
+                                      !useManualInput ? 'primary' : 'tertiary'
                                     }
-                                    disabled={isIonetLocked}
+                                    onClick={() => {
+                                      setUseManualInput(false);
+                                      // 切换到文件上传模式时清空手动输入的密钥
+                                      if (formApiRef.current) {
+                                        formApiRef.current.setValue('key', '');
+                                      }
+                                      handleInputChange('key', '');
+                                    }}
                                   >
-                                    {t('Codex 授权')}
+                                    {t('文件上传')}
                                   </Button>
-                                  {isEdit && (
-                                    <Button
-                                      size='small'
-                                      type='primary'
-                                      theme='outline'
-                                      onClick={handleRefreshCodexCredential}
-                                      loading={codexCredentialRefreshing}
-                                      disabled={isIonetLocked}
-                                    >
-                                      {t('刷新凭证')}
-                                    </Button>
-                                  )}
                                   <Button
                                     size='small'
-                                    type='primary'
-                                    theme='outline'
-                                    onClick={() => formatJsonField('key')}
-                                    disabled={isIonetLocked}
+                                    type={
+                                      useManualInput ? 'primary' : 'tertiary'
+                                    }
+                                    onClick={() => {
+                                      setUseManualInput(true);
+                                      // 切换到手动输入模式时清空文件上传相关状态
+                                      setVertexKeys([]);
+                                      setVertexFileList([]);
+                                      if (formApiRef.current) {
+                                        formApiRef.current.setValue(
+                                          'vertex_files',
+                                          [],
+                                        );
+                                      }
+                                      setInputs((prev) => ({
+                                        ...prev,
+                                        vertex_files: [],
+                                      }));
+                                    }}
                                   >
-                                    {t('格式化')}
+                                    {t('手动输入')}
                                   </Button>
-                                  {isEdit && (
-                                    <Button
-                                      size='small'
-                                      type='primary'
-                                      theme='outline'
-                                      onClick={handleShow2FAModal}
-                                      disabled={isIonetLocked}
-                                    >
-                                      {t('查看密钥')}
-                                    </Button>
-                                  )}
-                                  {batchExtra}
                                 </Space>
                               </div>
-                            }
-                            autosize
-                            showClear
-                          />
-
-                          <CodexOAuthModal
-                            visible={codexOAuthModalVisible}
-                            onCancel={() => setCodexOAuthModalVisible(false)}
-                            onSuccess={handleCodexOAuthGenerated}
-                          />
-                        </>
-                      ) : inputs.type === 41 &&
-                        (inputs.vertex_key_type || 'json') === 'json' ? (
-                        <>
-                          {!batch && (
-                            <div className='flex items-center justify-between mb-3'>
-                              <Text className='text-sm font-medium'>
-                                {t('密钥输入方式')}
-                              </Text>
-                              <Space>
-                                <Button
-                                  size='small'
-                                  type={
-                                    !useManualInput ? 'primary' : 'tertiary'
-                                  }
-                                  onClick={() => {
-                                    setUseManualInput(false);
-                                    // 切换到文件上传模式时清空手动输入的密钥
-                                    if (formApiRef.current) {
-                                      formApiRef.current.setValue('key', '');
-                                    }
-                                    handleInputChange('key', '');
-                                  }}
-                                >
-                                  {t('文件上传')}
-                                </Button>
-                                <Button
-                                  size='small'
-                                  type={useManualInput ? 'primary' : 'tertiary'}
-                                  onClick={() => {
-                                    setUseManualInput(true);
-                                    // 切换到手动输入模式时清空文件上传相关状态
-                                    setVertexKeys([]);
-                                    setVertexFileList([]);
-                                    if (formApiRef.current) {
-                                      formApiRef.current.setValue(
-                                        'vertex_files',
-                                        [],
-                                      );
-                                    }
-                                    setInputs((prev) => ({
-                                      ...prev,
-                                      vertex_files: [],
-                                    }));
-                                  }}
-                                >
-                                  {t('手动输入')}
-                                </Button>
-                              </Space>
-                            </div>
-                          )}
+                            )}
 
                             {batch && (
                               <Banner
@@ -3127,11 +3136,31 @@ const EditChannelModal = (props) => {
                               onClick={() =>
                                 handleInputChange(
                                   'header_override',
+                                    JSON.stringify(
+                                        {
+                                          '*': true,
+                                          're:^X-Trace-.*$': true,
+                                          'X-Foo': '{client_header:X-Foo}',
+                                          Authorization: 'Bearer {api_key}',
+                                          'User-Agent':
+                                              'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/139.0.0.0 Safari/537.36 Edg/139.0.0.0',
+                                        },
+                                        null,
+                                        2,
+                                    ),
+                                )
+                              }
+                            >
+                              {t('填入模板')}
+                            </Text>
+                            <Text
+                              className='!text-semi-color-primary cursor-pointer'
+                              onClick={() =>
+                                handleInputChange(
+                                  'header_override',
                                   JSON.stringify(
                                     {
-                                      'User-Agent':
-                                        'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/139.0.0.0 Safari/537.36 Edg/139.0.0.0',
-                                      Authorization: 'Bearer{api_key}',
+                                      '*': true,
                                     },
                                     null,
                                     2,
@@ -3139,7 +3168,7 @@ const EditChannelModal = (props) => {
                                 )
                               }
                             >
-                              {t('填入模板')}
+                              {t('填入透传模版')}
                             </Text>
                             <Text
                               className='!text-semi-color-primary cursor-pointer'
