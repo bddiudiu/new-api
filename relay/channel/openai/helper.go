@@ -2,6 +2,7 @@ package openai
 
 import (
 	"encoding/json"
+	"sort"
 	"strings"
 
 	"github.com/QuantumNous/new-api/common"
@@ -196,10 +197,37 @@ func handleLastResponse(lastStreamData string, responseId *string, createAt *int
 
 func HandleFinalResponse(c *gin.Context, info *relaycommon.RelayInfo, lastStreamData string,
 	responseId string, createAt int64, model string, systemFingerprint string,
-	usage *dto.Usage, containStreamUsage bool) {
+	usage *dto.Usage, containStreamUsage bool, accumulatedToolCalls map[int]*dto.ToolCallResponse) {
 
 	switch info.RelayFormat {
 	case types.RelayFormatOpenAI:
+		// 在流结束前发送包含 metainfo 的响应块
+		if len(accumulatedToolCalls) > 0 {
+			var toolCallsList []dto.ToolCallResponse
+			keys := make([]int, 0, len(accumulatedToolCalls))
+			for k := range accumulatedToolCalls {
+				keys = append(keys, k)
+			}
+			sort.Ints(keys)
+			for _, k := range keys {
+				tc := *accumulatedToolCalls[k]
+				idx := k // 创建局部变量避免循环变量指针问题
+				tc.Index = &idx
+				toolCallsList = append(toolCallsList, tc)
+			}
+
+			// 简化的顶层 metainfo 格式
+			metaInfoResponse := &dto.ChatCompletionsStreamResponse{
+				Id:      responseId,
+				Type:    "meta.info",
+				Created: createAt,
+				MetaInfo: &dto.MetaInfo{
+					ToolCalls: toolCallsList,
+				},
+			}
+			helper.ObjectData(c, metaInfoResponse)
+		}
+
 		if info.ShouldIncludeUsage && !containStreamUsage {
 			response := helper.GenerateFinalUsageResponse(responseId, createAt, model, *usage)
 			response.SetSystemFingerprint(systemFingerprint)
