@@ -69,6 +69,29 @@ func applySystemPromptIfNeeded(c *gin.Context, info *relaycommon.RelayInfo, requ
 	}
 }
 
+func applyToolsIfNeeded(info *relaycommon.RelayInfo, request *dto.GeneralOpenAIRequest) {
+	if info == nil || request == nil {
+		return
+	}
+	if info.ChannelSetting.Tools == "" {
+		return
+	}
+
+	var channelTools []dto.ToolCallRequest
+	if err := common.Unmarshal([]byte(info.ChannelSetting.Tools), &channelTools); err != nil || len(channelTools) == 0 {
+		return
+	}
+
+	if len(request.Tools) == 0 {
+		// 用户未提供 tools，使用渠道配置
+		request.Tools = channelTools
+	} else if info.ChannelSetting.ToolsAppend {
+		// 用户已提供 tools，且开启追加模式，将渠道配置追加到后面
+		request.Tools = append(request.Tools, channelTools...)
+	}
+	// 否则：用户已提供 tools，且未开启追加模式，保持用户配置不变
+}
+
 func chatCompletionsViaResponses(c *gin.Context, info *relaycommon.RelayInfo, adaptor channel.Adaptor, request *dto.GeneralOpenAIRequest) (*dto.Usage, *types.NewAPIError) {
 	overrideCtx := relaycommon.BuildParamOverrideContext(info)
 	chatJSON, err := common.Marshal(request)
