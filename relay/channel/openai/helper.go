@@ -2,6 +2,7 @@ package openai
 
 import (
 	"encoding/json"
+	"sort"
 	"strings"
 
 	"github.com/QuantumNous/new-api/common"
@@ -92,19 +93,19 @@ func ProcessStreamResponse(streamResponse dto.ChatCompletionsStreamResponse, res
 	return nil
 }
 
-func processTokens(relayMode int, streamItems []string, responseTextBuilder *strings.Builder, toolCount *int) error {
+func processTokens(relayMode int, streamItems []string, responseTextBuilder *strings.Builder, toolCount *int, accumulatedToolCalls map[int]*dto.ToolCallResponse) error {
 	streamResp := "[" + strings.Join(streamItems, ",") + "]"
 
 	switch relayMode {
 	case relayconstant.RelayModeChatCompletions:
-		return processChatCompletions(streamResp, streamItems, responseTextBuilder, toolCount)
+		return processChatCompletions(streamResp, streamItems, responseTextBuilder, toolCount, accumulatedToolCalls)
 	case relayconstant.RelayModeCompletions:
 		return processCompletions(streamResp, streamItems, responseTextBuilder)
 	}
 	return nil
 }
 
-func processChatCompletions(streamResp string, streamItems []string, responseTextBuilder *strings.Builder, toolCount *int) error {
+func processChatCompletions(streamResp string, streamItems []string, responseTextBuilder *strings.Builder, toolCount *int, accumulatedToolCalls map[int]*dto.ToolCallResponse) error {
 	var streamResponses []dto.ChatCompletionsStreamResponse
 	if err := json.Unmarshal(common.StringToByteSlice(streamResp), &streamResponses); err != nil {
 		// 一次性解析失败，逐个解析
@@ -114,7 +115,7 @@ func processChatCompletions(streamResp string, streamItems []string, responseTex
 			if err := json.Unmarshal(common.StringToByteSlice(item), &streamResponse); err != nil {
 				return err
 			}
-			if err := ProcessStreamResponse(streamResponse, responseTextBuilder, toolCount); err != nil {
+			if err := ProcessStreamResponseWithToolCalls(streamResponse, responseTextBuilder, toolCount, accumulatedToolCalls); err != nil {
 				common.SysLog("error processing stream response: " + err.Error())
 			}
 		}
@@ -133,6 +134,73 @@ func processChatCompletions(streamResp string, streamItems []string, responseTex
 				for _, tool := range choice.Delta.ToolCalls {
 					responseTextBuilder.WriteString(tool.Function.Name)
 					responseTextBuilder.WriteString(tool.Function.Arguments)
+					// 累积 tool_calls
+					if accumulatedToolCalls != nil && tool.Index != nil {
+						idx := *tool.Index
+						if _, exists := accumulatedToolCalls[idx]; !exists {
+							accumulatedToolCalls[idx] = &dto.ToolCallResponse{
+								ID:   tool.ID,
+								Type: tool.Type,
+								Function: dto.FunctionResponse{
+									Name:      tool.Function.Name,
+									Arguments: tool.Function.Arguments,
+								},
+							}
+						} else {
+							if tool.ID != "" {
+								accumulatedToolCalls[idx].ID = tool.ID
+							}
+							if tool.Type != "" {
+								accumulatedToolCalls[idx].Type = tool.Type
+							}
+							if tool.Function.Name != "" {
+								accumulatedToolCalls[idx].Function.Name += tool.Function.Name
+							}
+							accumulatedToolCalls[idx].Function.Arguments += tool.Function.Arguments
+						}
+					}
+				}
+			}
+		}
+	}
+	return nil
+}
+
+func ProcessStreamResponseWithToolCalls(streamResponse dto.ChatCompletionsStreamResponse, responseTextBuilder *strings.Builder, toolCount *int, accumulatedToolCalls map[int]*dto.ToolCallResponse) error {
+	for _, choice := range streamResponse.Choices {
+		responseTextBuilder.WriteString(choice.Delta.GetContentString())
+		responseTextBuilder.WriteString(choice.Delta.GetReasoningContent())
+		if choice.Delta.ToolCalls != nil {
+			if len(choice.Delta.ToolCalls) > *toolCount {
+				*toolCount = len(choice.Delta.ToolCalls)
+			}
+			for _, tool := range choice.Delta.ToolCalls {
+				responseTextBuilder.WriteString(tool.Function.Name)
+				responseTextBuilder.WriteString(tool.Function.Arguments)
+				// 累积 tool_calls
+				if accumulatedToolCalls != nil && tool.Index != nil {
+					idx := *tool.Index
+					if _, exists := accumulatedToolCalls[idx]; !exists {
+						accumulatedToolCalls[idx] = &dto.ToolCallResponse{
+							ID:   tool.ID,
+							Type: tool.Type,
+							Function: dto.FunctionResponse{
+								Name:      tool.Function.Name,
+								Arguments: tool.Function.Arguments,
+							},
+						}
+					} else {
+						if tool.ID != "" {
+							accumulatedToolCalls[idx].ID = tool.ID
+						}
+						if tool.Type != "" {
+							accumulatedToolCalls[idx].Type = tool.Type
+						}
+						if tool.Function.Name != "" {
+							accumulatedToolCalls[idx].Function.Name += tool.Function.Name
+						}
+						accumulatedToolCalls[idx].Function.Arguments += tool.Function.Arguments
+					}
 				}
 			}
 		}
@@ -196,10 +264,37 @@ func handleLastResponse(lastStreamData string, responseId *string, createAt *int
 
 func HandleFinalResponse(c *gin.Context, info *relaycommon.RelayInfo, lastStreamData string,
 	responseId string, createAt int64, model string, systemFingerprint string,
-	usage *dto.Usage, containStreamUsage bool) {
+	usage *dto.Usage, containStreamUsage bool, accumulatedToolCalls map[int]*dto.ToolCallResponse) {
 
 	switch info.RelayFormat {
 	case types.RelayFormatOpenAI:
+		// 在流结束前发送包含 metainfo 的响应块
+		if len(accumulatedToolCalls) > 0 {
+			var toolCallsList []dto.ToolCallResponse
+			keys := make([]int, 0, len(accumulatedToolCalls))
+			for k := range accumulatedToolCalls {
+				keys = append(keys, k)
+			}
+			sort.Ints(keys)
+			for _, k := range keys {
+				tc := *accumulatedToolCalls[k]
+				idx := k // 创建局部变量避免循环变量指针问题
+				tc.Index = &idx
+				toolCallsList = append(toolCallsList, tc)
+			}
+
+			// 简化的顶层 metainfo 格式
+			metaInfoResponse := &dto.ChatCompletionsStreamResponse{
+				Id:      responseId,
+				Type:    "meta.info",
+				Created: createAt,
+				MetaInfo: &dto.MetaInfo{
+					ToolCalls: toolCallsList,
+				},
+			}
+			helper.ObjectData(c, metaInfoResponse)
+		}
+
 		if info.ShouldIncludeUsage && !containStreamUsage {
 			response := helper.GenerateFinalUsageResponse(responseId, createAt, model, *usage)
 			response.SetSystemFingerprint(systemFingerprint)

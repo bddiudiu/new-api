@@ -90,6 +90,7 @@ type ChatCompletionsStreamResponseChoiceDelta struct {
 	Reasoning        *string            `json:"reasoning,omitempty"`
 	Role             string             `json:"role,omitempty"`
 	ToolCalls        []ToolCallResponse `json:"tool_calls,omitempty"`
+	MetaInfo         *MetaInfo          `json:"metainfo,omitempty"`
 }
 
 func (c *ChatCompletionsStreamResponseChoiceDelta) SetContentString(s string) {
@@ -138,7 +139,13 @@ type FunctionResponse struct {
 	Arguments  string `json:"arguments"`            // response
 }
 
+// MetaInfo 包含消息的元信息，如汇总的 tool_calls
+type MetaInfo struct {
+	ToolCalls []ToolCallResponse `json:"tool_calls,omitempty"`
+}
+
 type ChatCompletionsStreamResponse struct {
+	Type              string                                `json:"type,omitempty"`
 	Id                string                                `json:"id"`
 	Object            string                                `json:"object"`
 	Created           int64                                 `json:"created"`
@@ -146,6 +153,7 @@ type ChatCompletionsStreamResponse struct {
 	SystemFingerprint *string                               `json:"system_fingerprint"`
 	Choices           []ChatCompletionsStreamResponseChoice `json:"choices"`
 	Usage             *Usage                                `json:"usage"`
+	MetaInfo          *MetaInfo                             `json:"metainfo,omitempty"`
 }
 
 func (c *ChatCompletionsStreamResponse) IsFinished() bool {
