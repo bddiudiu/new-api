@@ -115,6 +115,15 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 		return
 	}
 
+	// 记录请求体日志
+	if common.LogRequestBodyEnabled {
+		if bodyStorage, bodyErr := common.GetBodyStorage(c); bodyErr == nil {
+			if bodyBytes, readErr := bodyStorage.Bytes(); readErr == nil {
+				logger.LogInfo(c, fmt.Sprintf("request body: %s", string(bodyBytes)))
+			}
+		}
+	}
+
 	relayInfo, err := relaycommon.GenRelayInfo(c, relayFormat, request, ws)
 	if err != nil {
 		newAPIError = types.NewError(err, types.ErrorCodeGenRelayInfoFailed)
