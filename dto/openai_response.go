@@ -153,7 +153,7 @@ type ChatCompletionsStreamResponse struct {
 	SystemFingerprint *string                               `json:"system_fingerprint"`
 	Choices           []ChatCompletionsStreamResponseChoice `json:"choices"`
 	Usage             *Usage                                `json:"usage"`
-	MetaInfo          *MetaInfo                             `json:"metaInfo,omitempty"`
+	MetaInfo          *MetaInfo                             `json:"metainfo,omitempty"`
 }
 
 func (c *ChatCompletionsStreamResponse) IsFinished() bool {
