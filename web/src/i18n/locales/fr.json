@@ -800,6 +800,7 @@
     "如：香港线路": "par exemple, Ligne de Hong Kong",
     "如果你对接的是上游One API或者New API等转发项目，请使用OpenAI类型，不要使用此类型，除非你知道你在做什么。": "Si vous vous connectez à des projets de redirection One API ou New API en amont, veuillez utiliser le type OpenAI. N'utilisez pas ce type, sauf si vous savez ce que vous faites.",
     "如果用户请求中包含系统提示词，则使用此设置拼接到用户的系统提示词前面": "Si la requête de l'utilisateur contient un prompt système, utilisez ce paramètre pour le concaténer avant le prompt système de l'utilisateur",
+    "如果用户请求中包含工具配置，则将渠道配置的工具追加到用户工具列表后面": "Si la demande utilisateur contient une configuration d'outil, ajoutez la configuration d'outil du canal à la fin de la liste des outils de l'utilisateur.",
     "如果镜像为私有，请填写密码或Token": "If the image is private, please fill in the password or token",
     "如果镜像为私有，请填写用户名": "If the image is private, please fill in the username",
     "始终使用浅色主题": "Toujours utiliser le thème clair",
