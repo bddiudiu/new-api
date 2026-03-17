@@ -1,6 +1,7 @@
 package channel
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -292,9 +293,16 @@ func DoApiRequest(a Adaptor, c *gin.Context, info *common.RelayInfo, requestBody
 	if err != nil {
 		return nil, fmt.Errorf("get request url failed: %w", err)
 	}
-	if common2.DebugEnabled {
-		println("fullRequestURL:", fullRequestURL)
+
+	var bodyBytes []byte
+	if common2.DebugEnabled && requestBody != nil {
+		bodyBytes, err = io.ReadAll(requestBody)
+		if err != nil {
+			return nil, fmt.Errorf("read request body failed: %w", err)
+		}
+		requestBody = bytes.NewBuffer(bodyBytes)
 	}
+
 	req, err := http.NewRequest(c.Request.Method, fullRequestURL, requestBody)
 	if err != nil {
 		return nil, fmt.Errorf("new request failed: %w", err)
@@ -311,6 +319,17 @@ func DoApiRequest(a Adaptor, c *gin.Context, info *common.RelayInfo, requestBody
 		return nil, err
 	}
 	applyHeaderOverrideToRequest(req, headerOverride)
+
+	if common2.DebugEnabled {
+		logger.LogInfo(c, fmt.Sprintf("[RELAY REQUEST] %s %s", req.Method, fullRequestURL))
+		var headerBuf strings.Builder
+		for k, vs := range req.Header {
+			headerBuf.WriteString(fmt.Sprintf("%s: %s\n", k, strings.Join(vs, ", ")))
+		}
+		logger.LogInfo(c, fmt.Sprintf("[RELAY REQUEST HEADERS]\n%s", headerBuf.String()))
+		logger.LogInfo(c, fmt.Sprintf("[RELAY REQUEST BODY]\n%s", string(bodyBytes)))
+	}
+
 	resp, err := doRequest(c, req, info)
 	if err != nil {
 		return nil, fmt.Errorf("do request failed: %w", err)
@@ -522,6 +541,15 @@ func doRequest(c *gin.Context, req *http.Request, info *common.RelayInfo) (*http
 	}
 	if resp == nil {
 		return nil, errors.New("resp is nil")
+	}
+
+	if common2.DebugEnabled && resp.Body != nil {
+		respBytes, readErr := io.ReadAll(resp.Body)
+		_ = resp.Body.Close()
+		if readErr == nil {
+			logger.LogInfo(c, fmt.Sprintf("[RELAY RESPONSE] status=%d\n%s", resp.StatusCode, string(respBytes)))
+		}
+		resp.Body = io.NopCloser(bytes.NewBuffer(respBytes))
 	}
 
 	_ = req.Body.Close()
