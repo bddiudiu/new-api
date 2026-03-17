@@ -152,11 +152,13 @@ func accumulateToolCalls(streamResponse dto.ChatCompletionsStreamResponse, accum
 		if choice.Delta.ToolCalls == nil {
 			continue
 		}
-		for _, tool := range choice.Delta.ToolCalls {
-			if tool.Index == nil {
-				continue
+		for i, tool := range choice.Delta.ToolCalls {
+			var idx int
+			if tool.Index != nil {
+				idx = *tool.Index
+			} else {
+				idx = i
 			}
-			idx := *tool.Index
 			if _, exists := accumulatedToolCalls[idx]; !exists {
 				accumulatedToolCalls[idx] = &dto.ToolCallResponse{
 					ID:   tool.ID,
