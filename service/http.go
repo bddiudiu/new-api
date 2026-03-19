@@ -47,10 +47,14 @@ func IOCopyBytesGracefully(c *gin.Context, src *http.Response, data []byte) {
 	c.Writer.Header().Set("Content-Length", fmt.Sprintf("%d", len(data)))
 
 	// Write header with status code (this sends the headers)
+	statusCode := http.StatusOK
 	if src != nil {
-		c.Writer.WriteHeader(src.StatusCode)
-	} else {
-		c.Writer.WriteHeader(http.StatusOK)
+		statusCode = src.StatusCode
+	}
+	c.Writer.WriteHeader(statusCode)
+
+	if common.DebugEnabled {
+		logger.LogInfo(c, fmt.Sprintf("[CLIENT FINAL RESPONSE] status=%d\n%s", statusCode, string(data)))
 	}
 
 	_, err := io.Copy(c.Writer, body)

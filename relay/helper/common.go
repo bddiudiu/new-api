@@ -54,27 +54,43 @@ func SetEventStreamHeaders(c *gin.Context) {
 	c.Writer.Header().Set("X-Accel-Buffering", "no")
 }
 
+func logClientFinalStreamChunk(c *gin.Context, tag string, payload string) {
+	if !common.DebugEnabled || c == nil {
+		return
+	}
+	logger.LogInfo(c, fmt.Sprintf("[%s]\n%s", tag, payload))
+}
+
 func ClaudeData(c *gin.Context, resp dto.ClaudeResponse) error {
 	jsonData, err := common.Marshal(resp)
 	if err != nil {
 		common.SysError("error marshalling stream response: " + err.Error())
 	} else {
-		c.Render(-1, common.CustomEvent{Data: fmt.Sprintf("event: %s\n", resp.Type)})
-		c.Render(-1, common.CustomEvent{Data: "data: " + string(jsonData)})
+		eventLine := fmt.Sprintf("event: %s\n", resp.Type)
+		dataLine := "data: " + string(jsonData)
+		logClientFinalStreamChunk(c, "CLIENT FINAL RESPONSE STREAM", eventLine+dataLine+"\n\n")
+		c.Render(-1, common.CustomEvent{Data: eventLine})
+		c.Render(-1, common.CustomEvent{Data: dataLine})
 	}
 	_ = FlushWriter(c)
 	return nil
 }
 
 func ClaudeChunkData(c *gin.Context, resp dto.ClaudeResponse, data string) {
-	c.Render(-1, common.CustomEvent{Data: fmt.Sprintf("event: %s\n", resp.Type)})
-	c.Render(-1, common.CustomEvent{Data: fmt.Sprintf("data: %s\n", data)})
+	eventLine := fmt.Sprintf("event: %s\n", resp.Type)
+	dataLine := fmt.Sprintf("data: %s\n", data)
+	logClientFinalStreamChunk(c, "CLIENT FINAL RESPONSE STREAM", eventLine+dataLine)
+	c.Render(-1, common.CustomEvent{Data: eventLine})
+	c.Render(-1, common.CustomEvent{Data: dataLine})
 	_ = FlushWriter(c)
 }
 
 func ResponseChunkData(c *gin.Context, resp dto.ResponsesStreamResponse, data string) {
-	c.Render(-1, common.CustomEvent{Data: fmt.Sprintf("event: %s\n", resp.Type)})
-	c.Render(-1, common.CustomEvent{Data: fmt.Sprintf("data: %s", data)})
+	eventLine := fmt.Sprintf("event: %s\n", resp.Type)
+	dataLine := fmt.Sprintf("data: %s", data)
+	logClientFinalStreamChunk(c, "CLIENT FINAL RESPONSE STREAM", eventLine+dataLine)
+	c.Render(-1, common.CustomEvent{Data: eventLine})
+	c.Render(-1, common.CustomEvent{Data: dataLine})
 	_ = FlushWriter(c)
 }
 
@@ -87,6 +103,8 @@ func StringData(c *gin.Context, str string) error {
 		return fmt.Errorf("request context done: %w", c.Request.Context().Err())
 	}
 
+	payload := "data: " + str + "\n\n"
+	logClientFinalStreamChunk(c, "CLIENT FINAL RESPONSE STREAM", payload)
 	c.Render(-1, common.CustomEvent{Data: "data: " + str})
 	return FlushWriter(c)
 }
@@ -100,7 +118,9 @@ func PingData(c *gin.Context) error {
 		return fmt.Errorf("request context done: %w", c.Request.Context().Err())
 	}
 
-	if _, err := c.Writer.Write([]byte(": PING\n\n")); err != nil {
+	payload := ": PING\n\n"
+	logClientFinalStreamChunk(c, "CLIENT FINAL RESPONSE PING", payload)
+	if _, err := c.Writer.Write([]byte(payload)); err != nil {
 		return fmt.Errorf("write ping data failed: %w", err)
 	}
 	return FlushWriter(c)

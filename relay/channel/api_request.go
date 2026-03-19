@@ -547,7 +547,7 @@ func doRequest(c *gin.Context, req *http.Request, info *common.RelayInfo) (*http
 		respBytes, readErr := io.ReadAll(resp.Body)
 		_ = resp.Body.Close()
 		if readErr == nil {
-			logger.LogInfo(c, fmt.Sprintf("[RELAY RESPONSE] status=%d\n%s", resp.StatusCode, string(respBytes)))
+			logger.LogInfo(c, fmt.Sprintf("[UPSTREAM RAW RESPONSE] status=%d\n%s", resp.StatusCode, string(respBytes)))
 		}
 		resp.Body = io.NopCloser(bytes.NewBuffer(respBytes))
 	}

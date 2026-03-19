@@ -19,6 +19,7 @@ import (
 
 const KeyRequestBody = "key_request_body"
 const KeyBodyStorage = "key_body_storage"
+const keyClientRawRequestBodyLogged = "key_client_raw_request_body_logged"
 
 var ErrRequestBodyTooLarge = errors.New("request body too large")
 
@@ -93,6 +94,29 @@ func GetBodyStorage(c *gin.Context) (BodyStorage, error) {
 		return nil, errors.New("unexpected body storage type")
 	}
 	return bs, nil
+}
+
+func LogRawRequestBodyIfNeeded(c *gin.Context) {
+	if !DebugEnabled || c == nil {
+		return
+	}
+	if logged, exists := c.Get(keyClientRawRequestBodyLogged); exists {
+		if alreadyLogged, ok := logged.(bool); ok && alreadyLogged {
+			return
+		}
+	}
+	storage, err := GetBodyStorage(c)
+	if err != nil {
+		fmt.Fprintf(gin.DefaultErrorWriter, "[ERR] %s | %v | failed to get raw request body for debug log: %s \n", time.Now().Format("2006/01/02 - 15:04:05"), c.GetString(RequestIdKey), err.Error())
+		return
+	}
+	requestBody, err := storage.Bytes()
+	if err != nil {
+		fmt.Fprintf(gin.DefaultErrorWriter, "[ERR] %s | %v | failed to read raw request body for debug log: %s \n", time.Now().Format("2006/01/02 - 15:04:05"), c.GetString(RequestIdKey), err.Error())
+		return
+	}
+	c.Set(keyClientRawRequestBodyLogged, true)
+	fmt.Fprintf(gin.DefaultWriter, "[INFO] %s | %v | [CLIENT RAW REQUEST BODY]\n%s \n", time.Now().Format("2006/01/02 - 15:04:05"), c.GetString(RequestIdKey), string(requestBody))
 }
 
 // CleanupBodyStorage 清理请求体存储（应在请求结束时调用）
