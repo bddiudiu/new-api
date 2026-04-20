@@ -295,6 +295,10 @@ func SetApiRouter(router *gin.Engine) {
 		logRoute.GET("/self", middleware.UserAuth(), controller.GetUserLogs)
 		logRoute.GET("/self/search", middleware.UserAuth(), middleware.SearchRateLimit(), controller.SearchUserLogs)
 
+		quotaExpiryRoute := apiRouter.Group("/quota-expiry")
+		quotaExpiryRoute.POST("/rebuild", middleware.AdminAuth(), controller.RebuildQuotaExpiry)
+		quotaExpiryRoute.GET("/rebuild/status", middleware.AdminAuth(), controller.GetRebuildStatus)
+
 		dataRoute := apiRouter.Group("/data")
 		dataRoute.GET("/", middleware.AdminAuth(), controller.GetAllQuotaDates)
 		dataRoute.GET("/users", middleware.AdminAuth(), controller.GetQuotaDatesByUser)

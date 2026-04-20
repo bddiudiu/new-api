@@ -8,6 +8,7 @@ import (
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/logger"
+	"github.com/QuantumNous/new-api/setting/operation_setting"
 	"github.com/QuantumNous/new-api/types"
 
 	"github.com/gin-gonic/gin"
@@ -73,6 +74,11 @@ func GetLogByTokenId(tokenId int) (logs []*Log, err error) {
 }
 
 func RecordLog(userId int, logType int, content string) {
+	RecordLogWithQuota(userId, logType, 0, content)
+}
+
+// RecordLogWithQuota 用于需要追踪额度有效期的日志
+func RecordLogWithQuota(userId int, logType int, quota int, content string) {
 	if logType == LogTypeConsume && !common.LogConsumeEnabled {
 		return
 	}
@@ -83,10 +89,21 @@ func RecordLog(userId int, logType int, content string) {
 		CreatedAt: common.GetTimestamp(),
 		Type:      logType,
 		Content:   content,
+		Quota:     quota,
 	}
 	err := LOG_DB.Create(log).Error
 	if err != nil {
 		common.SysLog("failed to record log: " + err.Error())
+		return
+	}
+
+	// 若该日志类型配置了有效期，创建 expiry 记录
+	if quota > 0 {
+		days := operation_setting.GetExpireDaysForLogType(logType)
+		if days > 0 {
+			expireAt := time.Now().AddDate(0, 0, days).Unix()
+			_ = CreateLogQuotaExpiry(log.Id, userId, quota, expireAt)
+		}
 	}
 }
 
@@ -244,7 +261,16 @@ func RecordConsumeLog(c *gin.Context, userId int, params RecordConsumeLogParams)
 	err := LOG_DB.Create(log).Error
 	if err != nil {
 		logger.LogError(c, "failed to record log: "+err.Error())
+		return
 	}
+
+	// 异步执行 FIFO 消费归因
+	if params.Quota > 0 {
+		gopool.Go(func() {
+			_ = ApplyConsumeToExpiries(userId, params.Quota)
+		})
+	}
+
 	if common.DataExportEnabled {
 		gopool.Go(func() {
 			LogQuotaData(userId, username, params.ModelName, params.Quota, common.GetTimestamp(), params.PromptTokens+params.CompletionTokens)
