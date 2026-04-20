@@ -132,6 +132,24 @@ function renderType(type, t) {
           {t('退款')}
         </Tag>
       );
+    case 7:
+      return (
+          <Tag color='teal' shape='circle'>
+            {t('AI语音')}
+          </Tag>
+      );
+    case 8:
+      return (
+          <Tag color='teal' shape='circle'>
+            {t('AI会议')}
+          </Tag>
+      );
+    case 9:
+      return (
+          <Tag color='teal' shape='circle'>
+            {t('活动')}
+          </Tag>
+      );
     default:
       return (
         <Tag color='grey' shape='circle'>
