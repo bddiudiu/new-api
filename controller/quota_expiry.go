@@ -18,9 +18,10 @@ type RebuildQuotaExpiryRequest struct {
 }
 
 type RebuildQuotaExpiryResponse struct {
-	TaskId string `json:"task_id"`
-	Status string `json:"status"` // running / completed / failed
-	Error  string `json:"error,omitempty"`
+	TaskId string                         `json:"task_id"`
+	Status string                         `json:"status"` // running / completed / failed
+	Error  string                         `json:"error,omitempty"`
+	Stats  *model.RebuildQuotaExpiryStats `json:"stats,omitempty"`
 }
 
 var (
@@ -37,14 +38,14 @@ func RebuildQuotaExpiry(c *gin.Context) {
 	}
 
 	// 解析日期
-	startTime, err := time.Parse("2006-01-02", req.StartDate)
+	startTime, err := time.ParseInLocation("2006-01-02", req.StartDate, time.Local)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"success": false, "message": "日期格式错误，应为 YYYY-MM-DD"})
 		return
 	}
 
 	// 生成任务 ID
-	taskId := fmt.Sprintf("rebuild_%d", time.Now().Unix())
+	taskId := fmt.Sprintf("rebuild_%d", time.Now().UnixNano())
 
 	// 初始化任务状态
 	rebuildTaskMutex.Lock()
@@ -57,7 +58,7 @@ func RebuildQuotaExpiry(c *gin.Context) {
 	// 异步执行重建
 	gopool.Go(func() {
 		logTypeExpireDays := operation_setting.GetLogTypeExpireDaysMap()
-		err := model.RebuildExpiriesFromDate(startTime.Unix(), logTypeExpireDays)
+		stats, err := model.RebuildExpiriesFromDate(startTime.Unix(), logTypeExpireDays)
 
 		rebuildTaskMutex.Lock()
 		defer rebuildTaskMutex.Unlock()
@@ -66,6 +67,7 @@ func RebuildQuotaExpiry(c *gin.Context) {
 			rebuildTaskStatus[taskId].Error = err.Error()
 		} else {
 			rebuildTaskStatus[taskId].Status = "completed"
+			rebuildTaskStatus[taskId].Stats = stats
 		}
 	})
 

@@ -101,8 +101,8 @@ func RecordLogWithQuota(userId int, logType int, quota int, content string) {
 	if quota > 0 {
 		days := operation_setting.GetExpireDaysForLogType(logType)
 		if days > 0 {
-			expireAt := time.Now().AddDate(0, 0, days).Unix()
-			_ = CreateLogQuotaExpiry(log.Id, userId, quota, expireAt)
+			expireAt := time.Unix(log.CreatedAt, 0).AddDate(0, 0, days).Unix()
+			_ = CreateLogQuotaExpiryWithCreatedAt(log.Id, userId, quota, expireAt, log.CreatedAt)
 		}
 	}
 }
@@ -266,8 +266,9 @@ func RecordConsumeLog(c *gin.Context, userId int, params RecordConsumeLogParams)
 
 	// 异步执行 FIFO 消费归因
 	if params.Quota > 0 {
+		consumeAt := log.CreatedAt
 		gopool.Go(func() {
-			_ = ApplyConsumeToExpiries(userId, params.Quota)
+			_ = ApplyConsumeToExpiries(userId, params.Quota, consumeAt)
 		})
 	}
 
@@ -318,6 +319,14 @@ func RecordTaskBillingLog(params RecordTaskBillingLogParams) {
 	err := LOG_DB.Create(log).Error
 	if err != nil {
 		common.SysLog("failed to record task billing log: " + err.Error())
+		return
+	}
+
+	if params.LogType == LogTypeConsume && params.Quota > 0 {
+		consumeAt := log.CreatedAt
+		gopool.Go(func() {
+			_ = ApplyConsumeToExpiries(params.UserId, params.Quota, consumeAt)
+		})
 	}
 }
 

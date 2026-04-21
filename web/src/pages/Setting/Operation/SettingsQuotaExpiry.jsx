@@ -37,6 +37,14 @@ import { useTranslation } from 'react-i18next';
 
 const { Text } = Typography;
 
+function formatLocalDate(date) {
+  const value = new Date(date);
+  const year = value.getFullYear();
+  const month = String(value.getMonth() + 1).padStart(2, '0');
+  const day = String(value.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+}
+
 export default function SettingsQuotaExpiry({ options = {}, refresh }) {
   const { t } = useTranslation();
   const [loading, setLoading] = useState(false);
@@ -109,7 +117,7 @@ export default function SettingsQuotaExpiry({ options = {}, refresh }) {
 
     setRebuildLoading(true);
     try {
-      const dateStr = new Date(rebuildDate).toISOString().split('T')[0];
+      const dateStr = formatLocalDate(rebuildDate);
       const res = await API.post('/api/quota-expiry/rebuild', {
         start_date: dateStr,
       });
