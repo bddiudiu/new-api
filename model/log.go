@@ -49,6 +49,9 @@ const (
 	LogTypeSystem  = 4
 	LogTypeError   = 5
 	LogTypeRefund  = 6
+	LogTypeVoice   = 7
+	LogTypeMeeting = 8
+	LogTypeActive  = 9
 )
 
 func formatUserLogs(logs []*Log, startIdx int) {
