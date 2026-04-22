@@ -3674,6 +3674,9 @@
     "默认测试模型": "Default Test Model",
     "默认用户消息": "Default User Message",
     "默认补全倍率": "Default completion ratio",
-    "活动": "Active"
+    "AI语音": "AI Voice",
+    "AI会议": "AI meeting",
+    "活动": "Active",
+    "模型解锁": "Model Unlock"
   }
 }

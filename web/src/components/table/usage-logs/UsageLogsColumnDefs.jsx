@@ -150,6 +150,12 @@ function renderType(type, t) {
             {t('活动')}
           </Tag>
       );
+    case 10:
+      return (
+          <Tag color='teal' shape='circle'>
+            {t('模型解锁')}
+          </Tag>
+      );
     default:
       return (
         <Tag color='grey' shape='circle'>

@@ -149,6 +149,10 @@ const LogsFilters = ({
               <Form.Select.Option value='4'>{t('系统')}</Form.Select.Option>
               <Form.Select.Option value='5'>{t('错误')}</Form.Select.Option>
               <Form.Select.Option value='6'>{t('退款')}</Form.Select.Option>
+              <Form.Select.Option value='7'>{t('AI语音')}</Form.Select.Option>
+              <Form.Select.Option value='8'>{t('AI会议')}</Form.Select.Option>
+              <Form.Select.Option value='9'>{t('活动')}</Form.Select.Option>
+              <Form.Select.Option value='10'>{t('模型解锁')}</Form.Select.Option>
             </Form.Select>
           </div>
 
