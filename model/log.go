@@ -52,6 +52,7 @@ const (
 	LogTypeVoice   = 7
 	LogTypeMeeting = 8
 	LogTypeActive  = 9
+	LogTypeUnlock  = 10
 )
 
 func formatUserLogs(logs []*Log, startIdx int) {
