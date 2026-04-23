@@ -82,11 +82,16 @@ func RecordLog(userId int, logType int, content string) {
 }
 
 // RecordLogWithQuota 用于需要追踪额度有效期的日志
-func RecordLogWithQuota(userId int, logType int, quota int, content string) {
+func RecordLogWithQuota(userId int, logType int, quota int, content string, other ...string) {
 	if logType == LogTypeConsume && !common.LogConsumeEnabled {
 		return
 	}
 	username, _ := GetUsernameById(userId, false)
+	group, _ := GetUserGroup(userId, false)
+	otherStr := ""
+	if len(other) > 0 {
+		otherStr = other[0]
+	}
 	log := &Log{
 		UserId:    userId,
 		Username:  username,
@@ -94,6 +99,8 @@ func RecordLogWithQuota(userId int, logType int, quota int, content string) {
 		Type:      logType,
 		Content:   content,
 		Quota:     quota,
+		Group:     group,
+		Other:     otherStr,
 	}
 	err := LOG_DB.Create(log).Error
 	if err != nil {

@@ -16,6 +16,7 @@ type RecordLogWithQuotaRequest struct {
 	LogType int    `json:"log_type" binding:"required,gt=0"`
 	Quota   int    `json:"quota"`
 	Content string `json:"content" binding:"required"`
+	Other   string `json:"other"`
 }
 
 func isSupportedLogType(logType int) bool {
@@ -52,13 +53,8 @@ func RecordLogWithQuota(c *gin.Context) {
 		return
 	}
 
-	model.RecordLogWithQuota(req.UserId, req.LogType, req.Quota, req.Content)
-	common.ApiSuccess(c, gin.H{
-		"user_id":  req.UserId,
-		"log_type": req.LogType,
-		"quota":    req.Quota,
-		"content":  req.Content,
-	})
+	model.RecordLogWithQuota(req.UserId, req.LogType, req.Quota, req.Content, req.Other)
+	common.ApiSuccess(c, nil)
 }
 
 func GetAllLogs(c *gin.Context) {
