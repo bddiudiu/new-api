@@ -83,6 +83,10 @@ func RecordLog(userId int, logType int, content string) {
 
 // RecordLogWithQuota 用于需要追踪额度有效期的日志
 func RecordLogWithQuota(userId int, logType int, quota int, content string, other ...string) {
+	recordLogWithQuota(userId, logType, quota, content, true, other...)
+}
+
+func recordLogWithQuota(userId int, logType int, quota int, content string, trackExpiry bool, other ...string) {
 	if logType == LogTypeConsume && !common.LogConsumeEnabled {
 		return
 	}
@@ -109,10 +113,10 @@ func RecordLogWithQuota(userId int, logType int, quota int, content string, othe
 	}
 
 	// 若该日志类型配置了有效期，创建 expiry 记录
-	if quota > 0 {
+	if trackExpiry && quota > 0 {
 		days := operation_setting.GetExpireDaysForLogType(logType)
 		if days > 0 {
-			expireAt := time.Unix(log.CreatedAt, 0).AddDate(0, 0, days).Unix()
+			expireAt := calculateQuotaExpireAt(log.CreatedAt, days)
 			_ = CreateLogQuotaExpiryWithCreatedAt(log.Id, userId, quota, expireAt, log.CreatedAt)
 		}
 	}

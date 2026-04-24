@@ -34,6 +34,39 @@ const (
 	LogQuotaExpiryStatusProcessed  = "processed"
 )
 
+var quotaExpiryLocation = func() *time.Location {
+	location, err := time.LoadLocation("Asia/Shanghai")
+	if err != nil {
+		return time.FixedZone("CST", 8*3600)
+	}
+	return location
+}()
+
+func quotaExpiryDayStart(ts int64) int64 {
+	if ts <= 0 {
+		return 0
+	}
+	t := time.Unix(ts, 0).In(quotaExpiryLocation)
+	dayStart := time.Date(t.Year(), t.Month(), t.Day(), 0, 0, 0, 0, quotaExpiryLocation)
+	return dayStart.Unix()
+}
+
+func quotaExpiryDateOnly(ts int64) string {
+	if ts <= 0 {
+		return ""
+	}
+	return time.Unix(ts, 0).In(quotaExpiryLocation).Format("2006-01-02")
+}
+
+func calculateQuotaExpireAt(createdAt int64, expireDays int) int64 {
+	if createdAt <= 0 || expireDays <= 0 {
+		return 0
+	}
+	createdDay := time.Unix(createdAt, 0).In(quotaExpiryLocation)
+	expireDayStart := time.Date(createdDay.Year(), createdDay.Month(), createdDay.Day(), 0, 0, 0, 0, quotaExpiryLocation).AddDate(0, 0, expireDays)
+	return expireDayStart.Unix()
+}
+
 func CreateLogQuotaExpiry(logId, userId, quota int, expireAt int64) error {
 	return CreateLogQuotaExpiryWithCreatedAt(logId, userId, quota, expireAt, 0)
 }
@@ -122,8 +155,8 @@ func applyConsumeToExpiriesWithDB(db *gorm.DB, userId int, consumeQuota int, con
 // GetPendingExpiredBatch 查询已到期的 pending 批次
 func GetPendingExpiredBatch(batchSize int) ([]*LogQuotaExpiry, error) {
 	var batches []*LogQuotaExpiry
-	now := common.GetTimestamp()
-	err := DB.Where("status = ? AND expire_at <= ?", LogQuotaExpiryStatusPending, now).
+	currentDayStart := quotaExpiryDayStart(common.GetTimestamp())
+	err := DB.Where("status = ? AND expire_at <= ?", LogQuotaExpiryStatusPending, currentDayStart).
 		Order("expire_at ASC, id ASC").
 		Limit(batchSize).
 		Find(&batches).Error
@@ -138,8 +171,17 @@ func MarkProcessed(id int) error {
 }
 
 func ProcessQuotaExpiry(id int) (int, bool, error) {
+	return processQuotaExpiry(id, "quota_expiry")
+}
+
+func ProcessQuotaExpiryWithReason(id int, reason string) (int, bool, error) {
+	return processQuotaExpiry(id, reason)
+}
+
+func processQuotaExpiry(id int, reason string) (int, bool, error) {
 	voidQuota := 0
 	userId := 0
+	expireAt := int64(0)
 	claimed := false
 
 	err := DB.Transaction(func(tx *gorm.DB) error {
@@ -159,6 +201,7 @@ func ProcessQuotaExpiry(id int) (int, bool, error) {
 			return err
 		}
 		userId = expiry.UserId
+		expireAt = expiry.ExpireAt
 		voidQuota = expiry.OriginalQuota - expiry.ConsumedQuota
 		if voidQuota > 0 {
 			if err := tx.Model(&User{}).
@@ -184,6 +227,7 @@ func ProcessQuotaExpiry(id int) (int, bool, error) {
 			}
 		}()
 	}
+	common.SysLog(fmt.Sprintf("quota expiry processed: reason=%s expiry_id=%d user_id=%d expire_date=%s void_quota=%d", reason, id, userId, quotaExpiryDateOnly(expireAt), voidQuota))
 	return voidQuota, true, nil
 }
 
@@ -250,15 +294,16 @@ func processExpiredExpiriesFromDate(startTime int64, statusByLogID map[int]strin
 		return nil, err
 	}
 
-	now := common.GetTimestamp()
+	currentDayStart := quotaExpiryDayStart(common.GetTimestamp())
+	common.SysLog(fmt.Sprintf("quota expiry rebuild: scanning expired pending batches from start_time=%d, count=%d, current_date=%s", startTime, len(pendingExpiries), quotaExpiryDateOnly(currentDayStart)))
 	for _, expiry := range pendingExpiries {
 		if statusByLogID[expiry.LogId] == LogQuotaExpiryStatusProcessed {
 			continue
 		}
-		if expiry.ExpireAt > now {
+		if expiry.ExpireAt > currentDayStart {
 			continue
 		}
-		voidQuota, processed, err := ProcessQuotaExpiry(expiry.Id)
+		voidQuota, processed, err := ProcessQuotaExpiryWithReason(expiry.Id, "rebuild_init")
 		if err != nil {
 			return nil, err
 		}
@@ -268,11 +313,14 @@ func processExpiredExpiriesFromDate(startTime int64, statusByLogID map[int]strin
 		stats.ProcessedExpiredCount++
 		stats.ProcessedExpiredVoidQuota += int64(voidQuota)
 		if voidQuota <= 0 {
+			common.SysLog(fmt.Sprintf("quota expiry rebuild: expiry_id=%d user_id=%d already fully consumed before expire_date=%s", expiry.Id, expiry.UserId, quotaExpiryDateOnly(expiry.ExpireAt)))
 			continue
 		}
 		RecordQuotaExpiryVoidLog(expiry.UserId, voidQuota)
+		common.SysLog(fmt.Sprintf("quota expiry rebuild: expiry_id=%d user_id=%d expired quota deducted, expire_date=%s, void_quota=%d", expiry.Id, expiry.UserId, quotaExpiryDateOnly(expiry.ExpireAt), voidQuota))
 		stats.GeneratedExpiryLogCount++
 	}
+	common.SysLog(fmt.Sprintf("quota expiry rebuild completed: start_time=%d processed=%d voided=%d logs=%d", startTime, stats.ProcessedExpiredCount, stats.ProcessedExpiredVoidQuota, stats.GeneratedExpiryLogCount))
 	return stats, nil
 }
 
@@ -281,14 +329,14 @@ func RecordQuotaExpiryVoidLog(userId int, voidQuota int) {
 		return
 	}
 	content := fmt.Sprintf("有效期到期-%d额度作废", voidQuota)
-	RecordLogWithQuota(userId, LogTypeSystem, voidQuota, content)
+	recordLogWithQuota(userId, LogTypeSystem, voidQuota, content, false)
 }
 
 func canConsumeFromExpiry(expiry *LogQuotaExpiry, consumeAt int64) bool {
 	if consumeAt < expiry.CreatedAt {
 		return false
 	}
-	return consumeAt < expiry.ExpireAt
+	return quotaExpiryDayStart(consumeAt) < expiry.ExpireAt
 }
 
 // RebuildExpiriesFromDate 从指定日期开始全量重建 expiry 记录
@@ -336,7 +384,7 @@ func RebuildExpiriesFromDate(startTime int64, logTypeExpireDays map[int]int) (*R
 		}
 
 		userSet[log.UserId] = struct{}{}
-		expireAt := time.Unix(log.CreatedAt, 0).AddDate(0, 0, days).Unix()
+		expireAt := calculateQuotaExpireAt(log.CreatedAt, days)
 		err = CreateLogQuotaExpiryWithCreatedAt(log.Id, log.UserId, log.Quota, expireAt, log.CreatedAt)
 		if err != nil {
 			common.SysLog(fmt.Sprintf("failed to create expiry for log %d: %v", log.Id, err))

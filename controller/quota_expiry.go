@@ -6,6 +6,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/setting/operation_setting"
 
@@ -57,6 +58,7 @@ func RebuildQuotaExpiry(c *gin.Context) {
 
 	// 异步执行重建
 	gopool.Go(func() {
+		common.SysLog(fmt.Sprintf("quota expiry rebuild task started: task_id=%s start_date=%s start_time=%d", taskId, req.StartDate, startTime.Unix()))
 		logTypeExpireDays := operation_setting.GetLogTypeExpireDaysMap()
 		stats, err := model.RebuildExpiriesFromDate(startTime.Unix(), logTypeExpireDays)
 
@@ -65,9 +67,19 @@ func RebuildQuotaExpiry(c *gin.Context) {
 		if err != nil {
 			rebuildTaskStatus[taskId].Status = "failed"
 			rebuildTaskStatus[taskId].Error = err.Error()
+			common.SysLog(fmt.Sprintf("quota expiry rebuild task failed: task_id=%s err=%v", taskId, err))
 		} else {
 			rebuildTaskStatus[taskId].Status = "completed"
 			rebuildTaskStatus[taskId].Stats = stats
+			common.SysLog(fmt.Sprintf("quota expiry rebuild task completed: task_id=%s rebuilt=%d affected_users=%d processed_expired=%d voided=%d generated_logs=%d restored=%d",
+				taskId,
+				stats.RebuiltExpiryCount,
+				stats.AffectedUserCount,
+				stats.ProcessedExpiredCount,
+				stats.ProcessedExpiredVoidQuota,
+				stats.GeneratedExpiryLogCount,
+				stats.RestoredProcessedCount,
+			))
 		}
 	})
 

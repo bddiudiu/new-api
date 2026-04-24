@@ -30,21 +30,38 @@ func StartQuotaExpiryTask() {
 		}
 		gopool.Go(func() {
 			logger.LogInfo(context.Background(), "quota expiry task started")
-			scheduleNextMidnight()
+			scheduleNextQuotaExpiryRun()
 		})
 	})
 }
 
-func scheduleNextMidnight() {
-	now := time.Now()
-	next := time.Date(now.Year(), now.Month(), now.Day()+1, 0, 0, 0, 0, now.Location())
+func quotaExpiryScheduleLocation() *time.Location {
+	location, err := time.LoadLocation("Asia/Shanghai")
+	if err != nil {
+		return time.FixedZone("CST", 8*3600)
+	}
+	return location
+}
+
+func nextQuotaExpiryRunTime(now time.Time) time.Time {
+	location := quotaExpiryScheduleLocation()
+	current := now.In(location)
+	next := time.Date(current.Year(), current.Month(), current.Day(), 0, 10, 0, 0, location)
+	if !next.After(current) {
+		next = next.AddDate(0, 0, 1)
+	}
+	return next
+}
+
+func scheduleNextQuotaExpiryRun() {
+	next := nextQuotaExpiryRunTime(time.Now())
 	duration := time.Until(next)
 
-	logger.LogInfo(context.Background(), fmt.Sprintf("quota expiry task: next run scheduled at %s (in %s)", next.Format("2006-01-02 15:04:05"), duration))
+	logger.LogInfo(context.Background(), fmt.Sprintf("quota expiry task: next run scheduled at %s Asia/Shanghai (in %s)", next.Format("2006-01-02 15:04:05"), duration))
 
 	time.AfterFunc(duration, func() {
 		runQuotaExpiryOnce()
-		scheduleNextMidnight()
+		scheduleNextQuotaExpiryRun()
 	})
 }
 
@@ -73,7 +90,7 @@ func runQuotaExpiryOnce() {
 		}
 
 		for _, expiry := range batch {
-			voidQuota, processed, err := model.ProcessQuotaExpiry(expiry.Id)
+			voidQuota, processed, err := model.ProcessQuotaExpiryWithReason(expiry.Id, "scheduled_task")
 			if err != nil {
 				logger.LogError(ctx, fmt.Sprintf("quota expiry task: failed to process expiry %d: %v", expiry.Id, err))
 				continue
