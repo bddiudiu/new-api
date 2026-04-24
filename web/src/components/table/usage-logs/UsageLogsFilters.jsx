@@ -153,6 +153,8 @@ const LogsFilters = ({
               <Form.Select.Option value='8'>{t('AI会议')}</Form.Select.Option>
               <Form.Select.Option value='9'>{t('活动')}</Form.Select.Option>
               <Form.Select.Option value='10'>{t('模型解锁')}</Form.Select.Option>
+              <Form.Select.Option value='11'>{t('签到')}</Form.Select.Option>
+              <Form.Select.Option value='12'>{t('额度过期')}</Form.Select.Option>
             </Form.Select>
           </div>
 

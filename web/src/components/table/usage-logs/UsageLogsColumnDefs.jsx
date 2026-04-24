@@ -156,6 +156,18 @@ function renderType(type, t) {
             {t('模型解锁')}
           </Tag>
       );
+    case 11:
+      return (
+          <Tag color='teal' shape='circle'>
+            {t('签到')}
+          </Tag>
+      );
+    case 12:
+      return (
+          <Tag color='teal' shape='circle'>
+            {t('额度过期')}
+          </Tag>
+      );
     default:
       return (
         <Tag color='grey' shape='circle'>

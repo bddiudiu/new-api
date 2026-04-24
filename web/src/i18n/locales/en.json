@@ -3677,6 +3677,8 @@
     "AI语音": "AI Voice",
     "AI会议": "AI meeting",
     "活动": "Active",
-    "模型解锁": "Model Unlock"
+    "模型解锁": "Model Unlock",
+    "签到": "Check-in",
+    "额度过期": "Quota Expiry"
   }
 }

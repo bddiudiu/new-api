@@ -21,7 +21,7 @@ type RecordLogWithQuotaRequest struct {
 
 func isSupportedLogType(logType int) bool {
 	switch logType {
-	case model.LogTypeTopup, model.LogTypeConsume, model.LogTypeManage, model.LogTypeSystem, model.LogTypeError, model.LogTypeRefund, model.LogTypeVoice, model.LogTypeMeeting, model.LogTypeActive, model.LogTypeUnlock:
+	case model.LogTypeTopup, model.LogTypeConsume, model.LogTypeManage, model.LogTypeSystem, model.LogTypeError, model.LogTypeRefund, model.LogTypeVoice, model.LogTypeMeeting, model.LogTypeActive, model.LogTypeUnlock, model.LogTypeCheckin, model.LogTypeQuotaExpiry:
 		return true
 	default:
 		return false

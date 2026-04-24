@@ -329,7 +329,7 @@ func RecordQuotaExpiryVoidLog(userId int, voidQuota int) {
 		return
 	}
 	content := fmt.Sprintf("有效期到期-%d额度作废", voidQuota)
-	recordLogWithQuota(userId, LogTypeSystem, voidQuota, content, false)
+	recordLogWithQuota(userId, LogTypeQuotaExpiry, voidQuota, content, false)
 }
 
 func canConsumeFromExpiry(expiry *LogQuotaExpiry, consumeAt int64) bool {
