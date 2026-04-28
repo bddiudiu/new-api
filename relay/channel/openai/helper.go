@@ -1,6 +1,7 @@
 package openai
 
 import (
+	"sort"
 	"strings"
 
 	"github.com/QuantumNous/new-api/common"
@@ -91,14 +92,17 @@ func ProcessStreamResponse(streamResponse dto.ChatCompletionsStreamResponse, res
 	return nil
 }
 
-func processTokenData(relayMode int, data string, responseTextBuilder *strings.Builder, toolCount *int) error {
+func processTokenData(relayMode int, data string, responseTextBuilder *strings.Builder, toolCount *int, accumulatedToolCalls map[int]*dto.ToolCallResponse) error {
 	switch relayMode {
 	case relayconstant.RelayModeChatCompletions:
 		var streamResponse dto.ChatCompletionsStreamResponse
 		if err := common.UnmarshalJsonStr(data, &streamResponse); err != nil {
 			return err
 		}
-		return ProcessStreamResponse(streamResponse, responseTextBuilder, toolCount)
+		if err := ProcessStreamResponse(streamResponse, responseTextBuilder, toolCount); err != nil {
+			return err
+		}
+		accumulateToolCalls(streamResponse, accumulatedToolCalls)
 	case relayconstant.RelayModeCompletions:
 		var streamResponse dto.CompletionsStreamResponse
 		if err := common.UnmarshalJsonStr(data, &streamResponse); err != nil {
@@ -107,6 +111,45 @@ func processTokenData(relayMode int, data string, responseTextBuilder *strings.B
 		processCompletionsStreamResponse(streamResponse, responseTextBuilder)
 	}
 	return nil
+}
+
+// accumulateToolCalls 从流式响应中累积完整的 tool_calls
+func accumulateToolCalls(streamResponse dto.ChatCompletionsStreamResponse, accumulatedToolCalls map[int]*dto.ToolCallResponse) {
+	if accumulatedToolCalls == nil {
+		return
+	}
+	for _, choice := range streamResponse.Choices {
+		if choice.Delta.ToolCalls == nil {
+			continue
+		}
+		for i, tool := range choice.Delta.ToolCalls {
+			idx := i
+			if tool.Index != nil {
+				idx = *tool.Index
+			}
+			if _, exists := accumulatedToolCalls[idx]; !exists {
+				accumulatedToolCalls[idx] = &dto.ToolCallResponse{
+					ID:   tool.ID,
+					Type: tool.Type,
+					Function: dto.FunctionResponse{
+						Name:      tool.Function.Name,
+						Arguments: tool.Function.Arguments,
+					},
+				}
+				continue
+			}
+			if tool.ID != "" {
+				accumulatedToolCalls[idx].ID = tool.ID
+			}
+			if tool.Type != nil && tool.Type != "" {
+				accumulatedToolCalls[idx].Type = tool.Type
+			}
+			if tool.Function.Name != "" {
+				accumulatedToolCalls[idx].Function.Name += tool.Function.Name
+			}
+			accumulatedToolCalls[idx].Function.Arguments += tool.Function.Arguments
+		}
+	}
 }
 
 func processCompletionsStreamResponse(streamResponse dto.CompletionsStreamResponse, responseTextBuilder *strings.Builder) {
@@ -145,10 +188,36 @@ func handleLastResponse(lastStreamData string, responseId *string, createAt *int
 
 func HandleFinalResponse(c *gin.Context, info *relaycommon.RelayInfo, lastStreamData string,
 	responseId string, createAt int64, model string, systemFingerprint string,
-	usage *dto.Usage, containStreamUsage bool) {
+	usage *dto.Usage, containStreamUsage bool, accumulatedToolCalls map[int]*dto.ToolCallResponse) {
 
 	switch info.RelayFormat {
 	case types.RelayFormatOpenAI:
+		// 在流结束前发送包含 metainfo 的响应块
+		if len(accumulatedToolCalls) > 0 {
+			keys := make([]int, 0, len(accumulatedToolCalls))
+			for idx := range accumulatedToolCalls {
+				keys = append(keys, idx)
+			}
+			sort.Ints(keys)
+
+			toolCalls := make([]dto.ToolCallResponse, 0, len(keys))
+			for _, idx := range keys {
+				toolCall := *accumulatedToolCalls[idx]
+				toolCall.SetIndex(idx)
+				toolCalls = append(toolCalls, toolCall)
+			}
+
+			response := &dto.ChatCompletionsStreamResponse{
+				Id:      responseId,
+				Type:    "meta.info",
+				Created: createAt,
+				MetaInfo: &dto.MetaInfo{
+					ToolCalls: toolCalls,
+				},
+			}
+			helper.ObjectData(c, response)
+		}
+
 		if info.ShouldIncludeUsage && !containStreamUsage {
 			response := helper.GenerateFinalUsageResponse(responseId, createAt, model, *usage)
 			response.SetSystemFingerprint(systemFingerprint)
