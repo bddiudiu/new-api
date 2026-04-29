@@ -17,10 +17,10 @@ import (
 )
 
 type Log struct {
-	Id               int    `json:"id" gorm:"index:idx_created_at_id,priority:1;index:idx_user_id_id,priority:2"`
-	UserId           int    `json:"user_id" gorm:"index;index:idx_user_id_id,priority:1"`
-	CreatedAt        int64  `json:"created_at" gorm:"bigint;index:idx_created_at_id,priority:2;index:idx_created_at_type"`
-	Type             int    `json:"type" gorm:"index:idx_created_at_type"`
+	Id               int    `json:"id" gorm:"index:idx_created_at_id,priority:1;index:idx_user_id_id,priority:2;index:idx_logs_type_created_id,priority:3;index:idx_logs_user_type_created_id,priority:4"`
+	UserId           int    `json:"user_id" gorm:"index;index:idx_user_id_id,priority:1;index:idx_logs_user_type_created_id,priority:1"`
+	CreatedAt        int64  `json:"created_at" gorm:"bigint;index:idx_created_at_id,priority:2;index:idx_created_at_type;index:idx_logs_type_created_id,priority:2;index:idx_logs_user_type_created_id,priority:3"`
+	Type             int    `json:"type" gorm:"index:idx_created_at_type;index:idx_logs_type_created_id,priority:1;index:idx_logs_user_type_created_id,priority:2"`
 	Content          string `json:"content"`
 	Username         string `json:"username" gorm:"index;index:index_username_model_name,priority:2;default:''"`
 	TokenName        string `json:"token_name" gorm:"index;default:''"`
@@ -41,14 +41,35 @@ type Log struct {
 
 // don't use iota, avoid change log type value
 const (
-	LogTypeUnknown = 0
-	LogTypeTopup   = 1
-	LogTypeConsume = 2
-	LogTypeManage  = 3
-	LogTypeSystem  = 4
-	LogTypeError   = 5
-	LogTypeRefund  = 6
+	LogTypeUnknown     = 0
+	LogTypeTopup       = 1
+	LogTypeConsume     = 2
+	LogTypeManage      = 3
+	LogTypeSystem      = 4
+	LogTypeError       = 5
+	LogTypeRefund      = 6
+	LogTypeVoice       = 7
+	LogTypeMeeting     = 8
+	LogTypeCheckin     = 11
+	LogTypeActive      = 9
+	LogTypeQuotaExpiry = 12
+	LogTypeUnlock      = 10
 )
+
+var quotaConsumeLogTypes = []int{LogTypeConsume, LogTypeVoice, LogTypeMeeting, LogTypeUnlock}
+
+func IsQuotaConsumeLogType(logType int) bool {
+	switch logType {
+	case LogTypeConsume, LogTypeVoice, LogTypeMeeting, LogTypeUnlock:
+		return true
+	default:
+		return false
+	}
+}
+
+func GetQuotaConsumeLogTypes() []int {
+	return append([]int(nil), quotaConsumeLogTypes...)
+}
 
 func formatUserLogs(logs []*Log, startIdx int) {
 	for i := range logs {
@@ -73,20 +94,47 @@ func GetLogByTokenId(tokenId int) (logs []*Log, err error) {
 }
 
 func RecordLog(userId int, logType int, content string) {
+	RecordLogWithQuota(userId, logType, 0, content)
+}
+
+// RecordLogWithQuota 用于需要追踪额度有效期的日志
+func RecordLogWithQuota(userId int, logType int, quota int, content string, other ...string) {
+	recordLogWithQuota(userId, logType, quota, content, true, other...)
+}
+
+func recordLogWithQuota(userId int, logType int, quota int, content string, trackExpiry bool, other ...string) {
 	if logType == LogTypeConsume && !common.LogConsumeEnabled {
 		return
 	}
 	username, _ := GetUsernameById(userId, false)
+	group, _ := GetUserGroup(userId, false)
+	otherStr := ""
+	if len(other) > 0 {
+		otherStr = other[0]
+	}
 	log := &Log{
 		UserId:    userId,
 		Username:  username,
 		CreatedAt: common.GetTimestamp(),
 		Type:      logType,
 		Content:   content,
+		Quota:     quota,
+		Group:     group,
+		Other:     otherStr,
 	}
 	err := LOG_DB.Create(log).Error
 	if err != nil {
 		common.SysLog("failed to record log: " + err.Error())
+		return
+	}
+
+	if trackExpiry && quota > 0 {
+		logCopy := *log
+		gopool.Go(func() {
+			if err := HandleQuotaExpiryLog(&logCopy); err != nil {
+				common.SysLog("failed to handle quota expiry log: " + err.Error())
+			}
+		})
 	}
 }
 
@@ -244,7 +292,18 @@ func RecordConsumeLog(c *gin.Context, userId int, params RecordConsumeLogParams)
 	err := LOG_DB.Create(log).Error
 	if err != nil {
 		logger.LogError(c, "failed to record log: "+err.Error())
+		return
 	}
+
+	if params.Quota > 0 {
+		logCopy := *log
+		gopool.Go(func() {
+			if err := HandleQuotaExpiryLog(&logCopy); err != nil {
+				common.SysLog("failed to handle quota expiry log: " + err.Error())
+			}
+		})
+	}
+
 	if common.DataExportEnabled {
 		gopool.Go(func() {
 			LogQuotaData(userId, username, params.ModelName, params.Quota, common.GetTimestamp(), params.PromptTokens+params.CompletionTokens)
@@ -292,6 +351,16 @@ func RecordTaskBillingLog(params RecordTaskBillingLogParams) {
 	err := LOG_DB.Create(log).Error
 	if err != nil {
 		common.SysLog("failed to record task billing log: " + err.Error())
+		return
+	}
+
+	if params.Quota > 0 {
+		logCopy := *log
+		gopool.Go(func() {
+			if err := HandleQuotaExpiryLog(&logCopy); err != nil {
+				common.SysLog("failed to handle quota expiry log: " + err.Error())
+			}
+		})
 	}
 }
 
@@ -469,8 +538,8 @@ func SumUsedQuota(logType int, startTimestamp int64, endTimestamp int64, modelNa
 		rpmTpmQuery = rpmTpmQuery.Where(logGroupCol+" = ?", group)
 	}
 
-	tx = tx.Where("type = ?", LogTypeConsume)
-	rpmTpmQuery = rpmTpmQuery.Where("type = ?", LogTypeConsume)
+	tx = tx.Where("type IN ?", quotaConsumeLogTypes)
+	rpmTpmQuery = rpmTpmQuery.Where("type IN ?", quotaConsumeLogTypes)
 
 	// 只统计最近60秒的rpm和tpm
 	rpmTpmQuery = rpmTpmQuery.Where("created_at >= ?", time.Now().Add(-60*time.Second).Unix())
@@ -505,7 +574,7 @@ func SumUsedToken(logType int, startTimestamp int64, endTimestamp int64, modelNa
 	if modelName != "" {
 		tx = tx.Where("model_name = ?", modelName)
 	}
-	tx.Where("type = ?", LogTypeConsume).Scan(&token)
+	tx.Where("type IN ?", quotaConsumeLogTypes).Scan(&token)
 	return token
 }
 
