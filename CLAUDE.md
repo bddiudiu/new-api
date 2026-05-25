@@ -1,4 +1,6 @@
-# CLAUDE.md — Project Conventions for new-api
+# CLAUDE.md
+
+This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
 ## Overview
 
@@ -36,6 +38,69 @@ pkg/           — Internal packages (cachex, ionet)
 web/           — React frontend
   web/src/i18n/  — Frontend internationalization (i18next, zh/en/fr/ru/ja/vi)
 ```
+
+### Relay Flow (Adaptor Pattern)
+
+The relay subsystem unifies 40+ upstream providers behind a single dispatch. Understanding this flow requires reading several files together:
+
+1. **Inbound request** lands on a route in `router/relay-router.go`.
+2. **`middleware/distributor.go`** picks an upstream `Channel` (DB row in `model/channel.go`) based on the requested model and the user's token/group, then stores `channel_type`, `api_type`, `base_url`, `model_name`, etc. on the `*gin.Context`.
+3. **Controller in `controller/relay.go`** (or `controller/relay-*.go` for image/audio/embedding/task variants) calls `relay.GetAdaptor(apiType)` in `relay/relay_adaptor.go` to resolve the provider-specific implementation.
+4. **`channel.Adaptor`** interface in `relay/channel/adapter.go` is the contract every provider implements. Lifecycle per request:
+   - `Init(info)` — stash channel-specific state
+   - `GetRequestURL(info)` / `SetupRequestHeader(...)` — build the upstream HTTP call
+   - `ConvertOpenAIRequest` / `ConvertClaudeRequest` / `ConvertGeminiRequest` / `ConvertEmbeddingRequest` / `ConvertImageRequest` / `ConvertAudioRequest` / `ConvertOpenAIResponsesRequest` — translate the inbound DTO (in `dto/`) into the upstream's body schema
+   - `DoRequest(...)` — execute the HTTP call (most providers delegate to `relay/channel/api_request.go`)
+   - `DoResponse(...)` — parse response (streaming or buffered) back into the inbound format and return token usage
+5. **`relaycommon.RelayInfo`** (`relay/common/`) is the per-request state carrier passed through every adaptor method.
+6. **Async task providers** (Midjourney, Suno, Kling, video models) implement `channel.TaskAdaptor` instead — submit + poll lifecycle with separate billing hooks (`EstimateBilling`, `AdjustBillingOnSubmit`, `AdjustBillingOnComplete`). Dispatch via `relay.GetTaskAdaptor(platform)`.
+
+When adding a new provider: create `relay/channel/<name>/adaptor.go` implementing `channel.Adaptor`, register an `APIType*` constant in `constant/`, wire it into `relay.GetAdaptor`, and (if the provider streams) follow Rule 4 below.
+
+## Common Commands
+
+### Backend (Go)
+
+```bash
+go run main.go                           # run the API server (reads .env, defaults to :3000)
+go build -o new-api                      # build binary
+go build -ldflags "-s -w -X 'github.com/QuantumNous/new-api/common.Version=$(cat VERSION)'" -o new-api  # production build with version
+
+go test ./...                            # run all tests
+go test ./service/...                    # run tests in one package tree
+go test -run TestQuotaExpiry ./model     # run a single test by name
+go test -v -race ./service/...           # verbose + race detector
+
+go vet ./...                             # static analysis
+gofmt -w .                               # format
+```
+
+### Frontend (web/, use Bun — see Rule 3)
+
+```bash
+cd web
+bun install                              # install deps (uses bun.lock)
+bun run dev                              # Vite dev server (proxies API to :3000)
+bun run build                            # production bundle into web/dist
+bun run lint                             # prettier --check
+bun run lint:fix                         # prettier --write
+bun run eslint                           # eslint
+bun run i18n:extract                     # extract t('...') keys
+bun run i18n:sync                        # propagate keys across locales
+bun run i18n:lint                        # validate translation files
+bun run i18n:status                      # show translation coverage
+```
+
+### Full Stack
+
+```bash
+make build-frontend                      # builds web/dist (used by main.go's go:embed)
+make all                                 # builds frontend + starts backend in background
+
+docker-compose up -d                     # full stack with postgres + redis (see docker-compose.yml)
+```
+
+The backend `go:embed`s `web/dist/`, so a fresh `bun run build` is required before `go build` for the embedded UI to reflect frontend changes.
 
 ## Internationalization (i18n)
 

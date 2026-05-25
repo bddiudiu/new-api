@@ -129,12 +129,13 @@ func recordLogWithQuota(userId int, logType int, quota int, content string, trac
 	}
 
 	if trackExpiry && quota > 0 {
-		logCopy := *log
-		gopool.Go(func() {
-			if err := HandleQuotaExpiryLog(&logCopy); err != nil {
-				common.SysLog("failed to handle quota expiry log: " + err.Error())
-			}
-		})
+		// 奖励/活动类 log 必须同步写入 expiry：消费的归因依赖 expiry 已落库，
+		// 异步处理时 gopool 可能让"用户签到后立刻消费"的两次 HandleQuotaExpiryLog
+		// 乱序，导致 consume 查不到刚发放的 expiry → void 时按 OriginalQuota 全额作废，
+		// 多扣用户额度。
+		if err := HandleQuotaExpiryLog(log); err != nil {
+			common.SysLog("failed to handle quota expiry log: " + err.Error())
+		}
 	}
 }
 

@@ -17,14 +17,12 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import {
   Banner,
   Button,
   Card,
   Form,
-  Input,
-  InputNumber,
   Modal,
   Space,
   Table,
@@ -53,6 +51,19 @@ export default function SettingsQuotaExpiry({ options = {}, refresh }) {
   const [rebuildModalVisible, setRebuildModalVisible] = useState(false);
   const [rebuildDate, setRebuildDate] = useState(null);
   const [rebuildLoading, setRebuildLoading] = useState(false);
+
+  // 仅允许配置奖励/收入类 log type 的过期天数。
+  // 充值 (1)、管理 (3)、错误 (5)、退款 (6)、作废 (12) 不允许配置，
+  // 否则可能导致用户充值的钱被作废或退款逻辑紊乱。
+  // 消费类 (2/7/8/10) 由 IsQuotaConsumeLogType 自动跟踪，无需配规则。
+  const ALLOWED_LOG_TYPES = useMemo(
+    () => [
+      { value: 4, label: t('系统') },
+      { value: 9, label: t('活动') },
+      { value: 11, label: t('签到') },
+    ],
+    [t],
+  );
 
   const [newRule, setNewRule] = useState({
     label: '',
@@ -96,6 +107,14 @@ export default function SettingsQuotaExpiry({ options = {}, refresh }) {
   const handleAddRule = () => {
     if (!newRule.label || newRule.log_type === 0 || newRule.expire_days <= 0) {
       showWarning(t('请填写完整信息'));
+      return;
+    }
+    if (!ALLOWED_LOG_TYPES.some((option) => option.value === newRule.log_type)) {
+      showWarning(t('该日志类型不允许配置有效期'));
+      return;
+    }
+    if (rules.some((rule) => rule.log_type === newRule.log_type)) {
+      showWarning(t('该日志类型已有规则，请勿重复添加'));
       return;
     }
     const updatedRules = [...rules, newRule];
@@ -231,19 +250,31 @@ export default function SettingsQuotaExpiry({ options = {}, refresh }) {
         onCancel={() => setAddModalVisible(false)}
       >
         <Form>
+          <Form.Select
+            field="log_type"
+            label={t('日志类型')}
+            placeholder={t('请选择日志类型')}
+            value={newRule.log_type || undefined}
+            onChange={(value) => {
+              const option = ALLOWED_LOG_TYPES.find((opt) => opt.value === value);
+              setNewRule({
+                ...newRule,
+                log_type: value,
+                label: newRule.label || (option ? option.label : ''),
+              });
+            }}
+            optionList={ALLOWED_LOG_TYPES.map((option) => ({
+              ...option,
+              disabled: rules.some((rule) => rule.log_type === option.value),
+            }))}
+            style={{ width: '100%' }}
+          />
           <Form.Input
             field="label"
-            label={t('日志类型名称')}
-            placeholder={t('例如：活动')}
+            label={t('备注名称')}
+            placeholder={t('例如：签到奖励')}
             value={newRule.label}
             onChange={(value) => setNewRule({ ...newRule, label: value })}
-          />
-          <Form.InputNumber
-            field="log_type"
-            label={t('日志类型值')}
-            placeholder={t('例如：4')}
-            value={newRule.log_type}
-            onChange={(value) => setNewRule({ ...newRule, log_type: value })}
           />
           <Form.InputNumber
             field="expire_days"

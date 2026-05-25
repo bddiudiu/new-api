@@ -2,6 +2,7 @@ package model
 
 import (
 	"fmt"
+	"sort"
 	"sync"
 	"time"
 
@@ -229,6 +230,15 @@ func isQuotaExpiryTrackedLog(log *Log) bool {
 	if IsQuotaConsumeLogType(log.Type) {
 		return true
 	}
+	if log.Type == LogTypeRefund {
+		return true
+	}
+	// 黑名单：充值、管理操作、错误、未知、作废自身这几类不允许配置过期，
+	// 即使管理员在前端误配规则也直接忽略，避免出现"用户充值的钱被作废"等数据事故。
+	switch log.Type {
+	case LogTypeUnknown, LogTypeTopup, LogTypeManage, LogTypeError, LogTypeQuotaExpiry:
+		return false
+	}
 	return operation_setting.GetExpireDaysForLogType(log.Type) > 0
 }
 
@@ -241,6 +251,9 @@ func applyQuotaExpiryLogWithDB(db *gorm.DB, log *Log) error {
 	}
 	if IsQuotaConsumeLogType(log.Type) {
 		return applyConsumeToExpiriesWithDB(db, log.UserId, log.Quota, log.CreatedAt)
+	}
+	if log.Type == LogTypeRefund {
+		return applyRefundToExpiriesWithDB(db, log.UserId, log.Quota, log.CreatedAt)
 	}
 
 	days := operation_setting.GetExpireDaysForLogType(log.Type)
@@ -284,6 +297,64 @@ func ApplyConsumeToExpiries(userId int, consumeQuota int, consumeAt int64) error
 	return applyConsumeToExpiriesWithDB(DB, userId, consumeQuota, consumeAt)
 }
 
+// applyRefundToExpiriesWithDB 将退款额度按 LIFO 回退到各批次的 consumed_quota，
+// 优先回退最近发放的奖励——它最可能与刚才被退款的消费对应。
+// 已被作废（status=processed）的 expiry 不再回退（过期作废是不可逆的）。
+func applyRefundToExpiriesWithDB(db *gorm.DB, userId int, refundQuota int, refundAt int64) error {
+	if refundQuota <= 0 {
+		return nil
+	}
+	if refundAt <= 0 {
+		refundAt = common.GetTimestamp()
+	}
+
+	remaining := refundQuota
+	conflicts := 0
+	for remaining > 0 {
+		var batch LogQuotaExpiry
+		err := db.Where(
+			"user_id = ? AND status = ? AND created_at <= ? AND consumed_quota > 0",
+			userId,
+			LogQuotaExpiryStatusPending,
+			refundAt,
+		).
+			Order("created_at DESC, id DESC").
+			First(&batch).Error
+		if err == gorm.ErrRecordNotFound {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		toRefund := remaining
+		if toRefund > batch.ConsumedQuota {
+			toRefund = batch.ConsumedQuota
+		}
+		result := db.Model(&LogQuotaExpiry{}).
+			Where(
+				"id = ? AND status = ? AND consumed_quota = ?",
+				batch.Id,
+				LogQuotaExpiryStatusPending,
+				batch.ConsumedQuota,
+			).
+			Update("consumed_quota", gorm.Expr("consumed_quota - ?", toRefund))
+		if result.Error != nil {
+			common.SysError(fmt.Sprintf("failed to refund consumed_quota for expiry %d: %v", batch.Id, result.Error))
+			return result.Error
+		}
+		if result.RowsAffected == 0 {
+			conflicts++
+			if conflicts >= 1024 {
+				return fmt.Errorf("too many concurrent conflicts while applying refund for user %d", userId)
+			}
+			continue
+		}
+		conflicts = 0
+		remaining -= toRefund
+	}
+	return nil
+}
+
 func applyConsumeToExpiriesWithDB(db *gorm.DB, userId int, consumeQuota int, consumeAt int64) error {
 	if consumeQuota <= 0 {
 		return nil
@@ -294,17 +365,19 @@ func applyConsumeToExpiriesWithDB(db *gorm.DB, userId int, consumeQuota int, con
 
 	remaining := consumeQuota
 	conflicts := 0
-	consumeDayStart := quotaExpiryDayStart(consumeAt)
+	// 不按 expire_at 排除已到期 expiry：到期日 0:00～void 任务执行（默认次日 0:10）之间存在窗口，
+	// 期间用户消费需要能归因到 pending 的过期 expiry，否则 void 时按 OriginalQuota-ConsumedQuota
+	// 会与已被 DecreaseUserQuota 扣减的部分重复扣减。
+	// FIFO 顺序按"先到期先消费"，最大化短期奖励的可用度。
 	for remaining > 0 {
 		var batch LogQuotaExpiry
 		err := db.Where(
-			"user_id = ? AND status = ? AND created_at <= ? AND expire_at > ? AND original_quota > consumed_quota",
+			"user_id = ? AND status = ? AND created_at <= ? AND original_quota > consumed_quota",
 			userId,
 			LogQuotaExpiryStatusPending,
 			consumeAt,
-			consumeDayStart,
 		).
-			Order("created_at ASC, id ASC").
+			Order("expire_at ASC, created_at ASC, id ASC").
 			First(&batch).Error
 		if err == gorm.ErrRecordNotFound {
 			return nil
@@ -998,23 +1071,34 @@ func rebuildUserConsumedQuota(userId int, startTime int64, snapshotMaxLogID int)
 		}
 
 		active := make([]*LogQuotaExpiry, 0, len(expiries))
-		activeHead := 0
 		expiryIdx := 0
 		for _, log := range consumeLogs {
+			activeChanged := false
 			for expiryIdx < len(expiries) && expiries[expiryIdx].CreatedAt <= log.CreatedAt {
 				active = append(active, expiries[expiryIdx])
 				expiryIdx++
+				activeChanged = true
+			}
+			if activeChanged {
+				sort.SliceStable(active, func(i, j int) bool {
+					if active[i].ExpireAt != active[j].ExpireAt {
+						return active[i].ExpireAt < active[j].ExpireAt
+					}
+					if active[i].CreatedAt != active[j].CreatedAt {
+						return active[i].CreatedAt < active[j].CreatedAt
+					}
+					return active[i].Id < active[j].Id
+				})
 			}
 
 			remaining := log.Quota
-			consumeDayStart := quotaExpiryDayStart(log.CreatedAt)
-			for remaining > 0 && activeHead < len(active) {
-				expiry := active[activeHead]
-				if consumeDayStart >= expiry.ExpireAt || expiry.OriginalQuota <= expiry.ConsumedQuota {
-					activeHead++
+			for _, expiry := range active {
+				if remaining <= 0 {
+					break
+				}
+				if expiry.OriginalQuota <= expiry.ConsumedQuota {
 					continue
 				}
-
 				available := expiry.OriginalQuota - expiry.ConsumedQuota
 				toConsume := remaining
 				if toConsume > available {
