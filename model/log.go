@@ -82,15 +82,36 @@ type Log struct {
 
 // don't use iota, avoid change log type value
 const (
-	LogTypeUnknown = 0
-	LogTypeTopup   = 1
-	LogTypeConsume = 2
-	LogTypeManage  = 3
-	LogTypeSystem  = 4
-	LogTypeError   = 5
-	LogTypeRefund  = 6
-	LogTypeLogin   = 7
+	LogTypeUnknown     = 0
+	LogTypeTopup       = 1
+	LogTypeConsume     = 2
+	LogTypeManage      = 3
+	LogTypeSystem      = 4
+	LogTypeError       = 5
+	LogTypeRefund      = 6
+	LogTypeLogin       = 7
+	LogTypeMeeting     = 8
+	LogTypeActive      = 9
+	LogTypeUnlock      = 10
+	LogTypeCheckin     = 11
+	LogTypeQuotaExpiry = 12
+	LogTypeVoice       = 13
 )
+
+var quotaConsumeLogTypes = []int{LogTypeConsume, LogTypeVoice, LogTypeMeeting, LogTypeUnlock}
+
+func IsQuotaConsumeLogType(logType int) bool {
+	for _, consumeLogType := range quotaConsumeLogTypes {
+		if consumeLogType == logType {
+			return true
+		}
+	}
+	return false
+}
+
+func GetQuotaConsumeLogTypes() []int {
+	return append([]int(nil), quotaConsumeLogTypes...)
+}
 
 func ensureLogRequestId(log *Log) {
 	if log != nil && log.RequestId == "" {
@@ -157,6 +178,34 @@ func RecordLog(userId int, logType int, content string) {
 	if err != nil {
 		common.SysLog("failed to record log: " + err.Error())
 	}
+}
+
+// RecordLogWithQuota records a log entry whose quota participates in quota accounting.
+func RecordLogWithQuota(userId int, logType int, quota int, content string, other ...string) error {
+	if logType == LogTypeConsume && !common.LogConsumeEnabled {
+		return nil
+	}
+	username, _ := GetUsernameById(userId, false)
+	group, _ := GetUserGroup(userId, false)
+	otherStr := ""
+	if len(other) > 0 {
+		otherStr = other[0]
+	}
+	log := &Log{
+		UserId:    userId,
+		Username:  username,
+		CreatedAt: common.GetTimestamp(),
+		Type:      logType,
+		Content:   content,
+		Quota:     quota,
+		Group:     group,
+		Other:     otherStr,
+	}
+	if err := createLog(log); err != nil {
+		common.SysLog("failed to record log with quota: " + err.Error())
+		return err
+	}
+	return nil
 }
 
 // RecordLogWithAdminInfo 记录操作日志，并将管理员相关信息存入 Other.admin_info，
@@ -652,8 +701,8 @@ func SumUsedQuota(logType int, startTimestamp int64, endTimestamp int64, modelNa
 		rpmTpmQuery = rpmTpmQuery.Where(logGroupCol+" = ?", group)
 	}
 
-	tx = tx.Where("type = ?", LogTypeConsume)
-	rpmTpmQuery = rpmTpmQuery.Where("type = ?", LogTypeConsume)
+	tx = tx.Where("type IN ?", quotaConsumeLogTypes)
+	rpmTpmQuery = rpmTpmQuery.Where("type IN ?", quotaConsumeLogTypes)
 
 	// 只统计最近60秒的rpm和tpm
 	rpmTpmQuery = rpmTpmQuery.Where("created_at >= ?", time.Now().Add(-60*time.Second).Unix())
@@ -688,7 +737,7 @@ func SumUsedToken(logType int, startTimestamp int64, endTimestamp int64, modelNa
 	if modelName != "" {
 		tx = tx.Where("model_name = ?", modelName)
 	}
-	tx.Where("type = ?", LogTypeConsume).Scan(&token)
+	tx.Where("type IN ?", quotaConsumeLogTypes).Scan(&token)
 	return token
 }
 

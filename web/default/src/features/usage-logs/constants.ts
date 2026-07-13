@@ -60,6 +60,12 @@ export const LOG_TYPE_ENUM = {
   ERROR: 5,
   REFUND: 6,
   LOGIN: 7,
+  MEETING: 8,
+  ACTIVITY: 9,
+  MODEL_UNLOCK: 10,
+  CHECK_IN: 11,
+  QUOTA_EXPIRY: 12,
+  VOICE: 13,
 } as const
 
 /**
@@ -98,6 +104,12 @@ export const LOG_TYPES = [
   { value: 5, label: 'Error', color: 'red' },
   { value: 6, label: 'Refund', color: 'blue' },
   { value: 7, label: 'Login', color: 'teal' },
+  { value: 13, label: 'AI Voice', color: 'teal' },
+  { value: 8, label: 'AI Meeting', color: 'teal' },
+  { value: 9, label: 'Activity', color: 'teal' },
+  { value: 10, label: 'Model Unlock', color: 'teal' },
+  { value: 11, label: 'Check-in', color: 'teal' },
+  { value: 12, label: 'Quota Expiry', color: 'teal' },
 ] as const
 
 /**
