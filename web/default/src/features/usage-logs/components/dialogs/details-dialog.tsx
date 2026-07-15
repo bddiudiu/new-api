@@ -289,18 +289,28 @@ function BillingBreakdown(props: {
     }
   }
 
-  if (other.web_search && other.web_search_call_count) {
-    rows.push({
-      label: t('Web Search'),
-      value: `${other.web_search_call_count}x${other.web_search_price ? ` (${fmtPrice(other.web_search_price)})` : ''}`,
-    })
-  }
+  if (other.tool_calls?.length) {
+    for (const toolCall of other.tool_calls) {
+      if (!toolCall.name || toolCall.call_count <= 0) continue
+      rows.push({
+        label: toolCall.name,
+        value: `${toolCall.call_count}x${toolCall.price_per_1k ? ` (${fmtPrice(toolCall.price_per_1k)})` : ''}`,
+      })
+    }
+  } else {
+    if (other.web_search && other.web_search_call_count) {
+      rows.push({
+        label: t('Web Search'),
+        value: `${other.web_search_call_count}x${other.web_search_price ? ` (${fmtPrice(other.web_search_price)})` : ''}`,
+      })
+    }
 
-  if (other.file_search && other.file_search_call_count) {
-    rows.push({
-      label: t('File Search'),
-      value: `${other.file_search_call_count}x${other.file_search_price ? ` (${fmtPrice(other.file_search_price)})` : ''}`,
-    })
+    if (other.file_search && other.file_search_call_count) {
+      rows.push({
+        label: t('File Search'),
+        value: `${other.file_search_call_count}x${other.file_search_price ? ` (${fmtPrice(other.file_search_price)})` : ''}`,
+      })
+    }
   }
 
   if (other.image_generation_call && other.image_generation_call_price) {
