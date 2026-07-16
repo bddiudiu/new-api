@@ -1657,6 +1657,7 @@ export function renderModelPrice(opts) {
     file_search: fileSearch = false,
     file_search_call_count: fileSearchCallCount = 0,
     file_search_price: fileSearchPrice = 0,
+    tool_calls: toolCalls = [],
     audio_input_seperate_price: audioInputSeperatePrice = false,
     audio_input_token_count: audioInputTokens = 0,
     audio_input_price: audioInputPrice = 0,
@@ -1672,6 +1673,15 @@ export function renderModelPrice(opts) {
   const completionRatio = _completionRatio ?? 0;
 
   const { symbol, rate } = getCurrencyConfig();
+  const normalizedToolCalls = Array.isArray(toolCalls)
+    ? toolCalls.filter(
+        (toolCall) =>
+          toolCall?.name &&
+          Number(toolCall.call_count) > 0 &&
+          Number(toolCall.price_per_1k) > 0,
+      )
+    : [];
+  const hasGenericToolCalls = normalizedToolCalls.length > 0;
 
   if (!shouldUseRatioBillingProcess(modelPrice)) {
     if (modelPrice !== -1) {
@@ -1709,12 +1719,21 @@ export function renderModelPrice(opts) {
     if (audioInputTokens > 0) {
       effectiveInputTokens -= audioInputTokens;
     }
+    const legacyToolCallPrice =
+      (webSearchCallCount / 1000) * webSearchPrice +
+      (fileSearchCallCount / 1000) * fileSearchPrice;
+    const genericToolCallPrice = normalizedToolCalls.reduce(
+      (total, toolCall) =>
+        total +
+        (Number(toolCall.call_count) / 1000) * Number(toolCall.price_per_1k),
+      0,
+    );
     const price =
       (effectiveInputTokens / 1000000) * inputRatioPrice * groupRatio +
       (audioInputTokens / 1000000) * audioInputPrice * groupRatio +
       (completionTokens / 1000000) * completionRatioPrice * groupRatio +
-      (webSearchCallCount / 1000) * webSearchPrice * groupRatio +
-      (fileSearchCallCount / 1000) * fileSearchPrice * groupRatio +
+      (hasGenericToolCalls ? genericToolCallPrice : legacyToolCallPrice) *
+        groupRatio +
       imageGenerationCallPrice * groupRatio;
 
     let inputDesc = '';
@@ -1775,7 +1794,15 @@ export function renderModelPrice(opts) {
     );
 
     const extraServices = [
-      webSearch && webSearchCallCount > 0
+      hasGenericToolCalls
+        ? normalizedToolCalls
+            .map(
+              (toolCall) =>
+                ` + ${toolCall.name} ${toolCall.call_count}x / 1K * ${symbol}${formatBillingDisplayPrice(Number(toolCall.price_per_1k), rate)} * ${ratioLabel} ${groupRatio}`,
+            )
+            .join('')
+        : '',
+      !hasGenericToolCalls && webSearch && webSearchCallCount > 0
         ? buildBillingPriceText(
             ' + Web搜索 {{count}}次 / 1K 次 * {{symbol}}{{price}} * {{ratioType}} {{ratio}}',
             {
@@ -1788,7 +1815,7 @@ export function renderModelPrice(opts) {
             },
           )
         : '',
-      fileSearch && fileSearchCallCount > 0
+      !hasGenericToolCalls && fileSearch && fileSearchCallCount > 0
         ? buildBillingPriceText(
             ' + 文件搜索 {{count}}次 / 1K 次 * {{symbol}}{{price}} * {{ratioType}} {{ratio}}',
             {
@@ -2104,6 +2131,7 @@ export function renderLogContent(opts) {
     web_search_call_count: webSearchCallCount = 0,
     file_search: fileSearch = false,
     file_search_call_count: fileSearchCallCount = 0,
+    tool_calls: toolCalls = [],
     displayMode = 'price',
   } = opts;
   const {
@@ -2114,6 +2142,11 @@ export function renderLogContent(opts) {
 
   // 获取货币配置
   const { symbol, rate } = getCurrencyConfig();
+  const normalizedToolCalls = Array.isArray(toolCalls)
+    ? toolCalls.filter(
+        (toolCall) => toolCall?.name && Number(toolCall.call_count) > 0,
+      )
+    : [];
 
   if (isPriceDisplayMode(displayMode, modelPrice)) {
     if (modelPrice !== -1) {
@@ -2154,22 +2187,30 @@ export function renderLogContent(opts) {
         price: (modelRatio * 2.0 * imageRatio * rate).toFixed(6),
       },
     );
-    appendPricePart(
-      parts,
-      webSearch,
-      'Web 搜索调用 {{webSearchCallCount}} 次',
-      {
-        webSearchCallCount,
-      },
-    );
-    appendPricePart(
-      parts,
-      fileSearch,
-      '文件搜索调用 {{fileSearchCallCount}} 次',
-      {
-        fileSearchCallCount,
-      },
-    );
+    if (normalizedToolCalls.length > 0) {
+      parts.push(
+        normalizedToolCalls
+          .map((toolCall) => `${toolCall.name} ${toolCall.call_count}x`)
+          .join('，'),
+      );
+    } else {
+      appendPricePart(
+        parts,
+        webSearch,
+        'Web 搜索调用 {{webSearchCallCount}} 次',
+        {
+          webSearchCallCount,
+        },
+      );
+      appendPricePart(
+        parts,
+        fileSearch,
+        '文件搜索调用 {{fileSearchCallCount}} 次',
+        {
+          fileSearchCallCount,
+        },
+      );
+    }
     parts.push(getGroupRatioText(groupRatio, user_group_ratio));
     return joinBillingSummary(parts);
   }

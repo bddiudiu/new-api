@@ -335,7 +335,7 @@ func TestComposeTieredTextQuotaKeepsToolCallSurcharges(t *testing.T) {
 		},
 		ResponsesUsageInfo: &relaycommon.ResponsesUsageInfo{
 			BuiltInTools: map[string]*relaycommon.BuildInToolInfo{
-				dto.BuildInToolWebSearchPreview: &relaycommon.BuildInToolInfo{
+				"web_search": &relaycommon.BuildInToolInfo{
 					CallCount: 1,
 				},
 				dto.BuildInToolFileSearch: &relaycommon.BuildInToolInfo{
@@ -364,6 +364,9 @@ func TestComposeTieredTextQuotaKeepsToolCallSurcharges(t *testing.T) {
 	})
 
 	require.Equal(t, int64(13000), summary.ToolCallSurchargeQuota.Round(0).IntPart())
+	require.Len(t, summary.ToolCallItems, 2)
+	require.Equal(t, dto.BuildInToolFileSearch, summary.ToolCallItems[0].Name)
+	require.Equal(t, "web_search", summary.ToolCallItems[1].Name)
 	require.Equal(t, 14000, quota)
 }
 

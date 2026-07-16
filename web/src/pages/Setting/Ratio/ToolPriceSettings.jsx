@@ -44,6 +44,8 @@ const DEFAULT_PRICES = {
   'web_search_preview:gpt-4o-mini*': 25.0,
   'web_search_preview:gpt-4.1-mini*': 25.0,
   file_search: 2.5,
+  web_extractor: 0,
+  code_interpreter: 0,
   google_search: 14.0,
 };
 
@@ -86,6 +88,8 @@ export default function ToolPriceSettings({ options }) {
 
     if (!prices || Object.keys(prices).length === 0) {
       prices = { ...DEFAULT_PRICES };
+    } else {
+      prices = { ...DEFAULT_PRICES, ...prices };
     }
 
     setRows(objectToRows(prices));

@@ -23,6 +23,8 @@ var defaultToolPrices = map[string]float64{
 	"web_search":         10.0, // OpenAI web search (all models) / Claude web search
 	"web_search_preview": 10.0, // OpenAI web search preview (default: reasoning models)
 	"file_search":        2.5,  // OpenAI file search (Responses API)
+	"web_extractor":      0,    // Configure a provider-specific price when needed
+	"code_interpreter":   0,    // Configure a provider-specific price when needed
 	"google_search":      14.0, // Gemini Grounding with Google Search
 }
 
