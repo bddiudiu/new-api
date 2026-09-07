@@ -7,12 +7,13 @@ import (
 	"strings"
 
 	"github.com/QuantumNous/new-api/common"
-	"github.com/QuantumNous/new-api/dto"
 	"github.com/QuantumNous/new-api/logger"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/relay/helper"
+	"github.com/QuantumNous/new-api/relaykit/dto"
+	"github.com/QuantumNous/new-api/relaykit/relayconvert"
+	"github.com/QuantumNous/new-api/relaykit/types"
 	"github.com/QuantumNous/new-api/service"
-	"github.com/QuantumNous/new-api/types"
 
 	"github.com/gin-gonic/gin"
 )
@@ -34,38 +35,33 @@ func OaiResponsesHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http
 		return nil, types.WithOpenAIError(*oaiError, resp.StatusCode)
 	}
 
-	if responsesResponse.HasImageGenerationCall() {
-		c.Set("image_generation_call", true)
-		c.Set("image_generation_call_quality", responsesResponse.GetQuality())
-		c.Set("image_generation_call_size", responsesResponse.GetSize())
-	}
-
 	// 写入新的 response body
 	service.IOCopyBytesGracefully(c, resp, responseBody)
 
 	// compute usage
-	usage := dto.Usage{}
-	if responsesResponse.Usage != nil {
-		usage.PromptTokens = responsesResponse.Usage.InputTokens
-		usage.CompletionTokens = responsesResponse.Usage.OutputTokens
-		usage.TotalTokens = responsesResponse.Usage.TotalTokens
-		usage.ToolUsage = responsesResponse.Usage.ToolUsage
-		if responsesResponse.Usage.InputTokensDetails != nil {
-			usage.PromptTokensDetails.CachedTokens = responsesResponse.Usage.InputTokensDetails.CachedTokens
-			usage.PromptTokensDetails.CacheWriteTokens = responsesResponse.Usage.InputTokensDetails.CacheWriteTokens
+	usage := relayconvert.NormalizeResponsesUsage(responsesResponse.Usage)
+	// Count actual tool invocations from Output (not tool declarations).
+	for _, output := range responsesResponse.Output {
+		switch output.Type {
+		case dto.BuildInCallWebSearchCall:
+			info.CountBillableToolCall(dto.BuildInCallWebSearchCall, "")
+		case dto.BuildInCallFileSearchCall:
+			info.CountBillableToolCall(dto.BuildInCallFileSearchCall, "")
+		case dto.BuildInCallFunctionCall:
+			info.CountBillableToolCall(dto.BuildInCallFunctionCall, output.Name)
 		}
 	}
-	if info == nil || info.ResponsesUsageInfo == nil || info.ResponsesUsageInfo.BuiltInTools == nil {
-		return &usage, nil
+
+	imageCounter := &relaycommon.ImageGenerationCallCounter{}
+	if !relaycommon.IsNonBillableResponsesStatus(responsesResponse.Status) {
+		for i := range responsesResponse.Output {
+			idx := i
+			imageCounter.Observe(&responsesResponse.Output[i], &idx)
+		}
 	}
-	// Only output call items prove that an upstream tool was actually used.
-	// responsesResponse.Tools merely echoes the configured tools.
-	for _, output := range responsesResponse.Output {
-		info.ResponsesUsageInfo.RecordToolCall(output.Type)
-	}
-	// usage.tool_usage is the current response's final tool-usage snapshot.
-	info.ResponsesUsageInfo.RecordCurrentToolUsage(usage.ToolUsage)
-	return &usage, nil
+	imageCounter.Commit(info)
+
+	return usage, nil
 }
 
 func OaiResponsesStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Response) (*dto.Usage, *types.NewAPIError) {
@@ -78,6 +74,8 @@ func OaiResponsesStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp
 
 	var usage = &dto.Usage{}
 	var responseTextBuilder strings.Builder
+	imageCounter := &relaycommon.ImageGenerationCallCounter{}
+	imageCommitted := false
 
 	helper.StreamScannerHandler(c, resp, info, func(data string, sr *helper.StreamResult) {
 
@@ -90,39 +88,53 @@ func OaiResponsesStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp
 		}
 		sendResponsesStreamData(c, streamResponse, data)
 		switch streamResponse.Type {
-		case "response.completed":
+		case "response.completed", "response.done":
 			if streamResponse.Response != nil {
 				if streamResponse.Response.Usage != nil {
-					if streamResponse.Response.Usage.InputTokens != 0 {
-						usage.PromptTokens = streamResponse.Response.Usage.InputTokens
-					}
-					if streamResponse.Response.Usage.OutputTokens != 0 {
-						usage.CompletionTokens = streamResponse.Response.Usage.OutputTokens
-					}
-					if streamResponse.Response.Usage.TotalTokens != 0 {
-						usage.TotalTokens = streamResponse.Response.Usage.TotalTokens
-					}
-					if streamResponse.Response.Usage.InputTokensDetails != nil {
-						usage.PromptTokensDetails.CachedTokens = streamResponse.Response.Usage.InputTokensDetails.CachedTokens
-						usage.PromptTokensDetails.CacheWriteTokens = streamResponse.Response.Usage.InputTokensDetails.CacheWriteTokens
-					}
-					usage.ToolUsage = streamResponse.Response.Usage.ToolUsage
-					if info != nil && info.ResponsesUsageInfo != nil {
-						info.ResponsesUsageInfo.RecordCurrentToolUsage(usage.ToolUsage)
+					incomingUsage := relayconvert.NormalizeResponsesUsage(streamResponse.Response.Usage)
+					usage = dto.MergeUsageNonZero(usage, incomingUsage)
+				}
+				if !imageCommitted {
+					if relaycommon.IsNonBillableResponsesStatus(streamResponse.Response.Status) {
+						imageCounter.Reset()
+						imageCounter.Commit(info)
+						imageCommitted = true
+					} else {
+						for i := range streamResponse.Response.Output {
+							idx := i
+							imageCounter.Observe(&streamResponse.Response.Output[i], &idx)
+						}
+						imageCounter.Commit(info)
+						imageCommitted = true
 					}
 				}
-				if streamResponse.Response.HasImageGenerationCall() {
-					c.Set("image_generation_call", true)
-					c.Set("image_generation_call_quality", streamResponse.Response.GetQuality())
-					c.Set("image_generation_call_size", streamResponse.Response.GetSize())
-				}
+			} else if !imageCommitted {
+				imageCounter.Commit(info)
+				imageCommitted = true
+			}
+		case "response.failed", "response.incomplete", "response.cancelled", "response.canceled":
+			if !imageCommitted {
+				imageCounter.Reset()
+				imageCounter.Commit(info)
+				imageCommitted = true
 			}
 		case "response.output_text.delta":
 			// 处理输出文本
 			responseTextBuilder.WriteString(streamResponse.Delta)
 		case dto.ResponsesOutputTypeItemDone:
-			if streamResponse.Item != nil && info != nil && info.ResponsesUsageInfo != nil {
-				info.ResponsesUsageInfo.RecordToolCall(streamResponse.Item.Type)
+			if streamResponse.Item != nil {
+				switch streamResponse.Item.Type {
+				case dto.BuildInCallWebSearchCall:
+					info.CountBillableToolCall(dto.BuildInCallWebSearchCall, "")
+				case dto.BuildInCallFileSearchCall:
+					info.CountBillableToolCall(dto.BuildInCallFileSearchCall, "")
+				case dto.BuildInCallFunctionCall:
+					info.CountBillableToolCall(dto.BuildInCallFunctionCall, streamResponse.Item.Name)
+				case dto.ResponsesOutputTypeImageGenerationCall:
+					if !imageCommitted {
+						imageCounter.Observe(streamResponse.Item, streamResponse.OutputIndex)
+					}
+				}
 			}
 		}
 	})
@@ -142,6 +154,9 @@ func OaiResponsesStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp
 	}
 
 	usage.TotalTokens = usage.PromptTokens + usage.CompletionTokens
+	if usage.BillingUsage != nil {
+		usage.BillingUsage = dto.CloneBillingUsageWithEstimatedCompletion(usage.BillingUsage, usage.CompletionTokens)
+	}
 
 	return usage, nil
 }
