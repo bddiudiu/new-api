@@ -3,12 +3,59 @@ package controller
 import (
 	"net/http"
 	"strconv"
+	"strings"
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/model"
 
 	"github.com/gin-gonic/gin"
 )
+
+type RecordLogWithQuotaRequest struct {
+	UserId  int    `json:"user_id" binding:"required,gt=0"`
+	LogType int    `json:"log_type" binding:"required,gt=0"`
+	Quota   int    `json:"quota"`
+	Content string `json:"content" binding:"required"`
+	Other   string `json:"other"`
+}
+
+func isSupportedLogType(logType int) bool {
+	switch logType {
+	case model.LogTypeTopup, model.LogTypeConsume, model.LogTypeManage, model.LogTypeSystem, model.LogTypeError, model.LogTypeRefund, model.LogTypeVoice, model.LogTypeMeeting, model.LogTypeActive, model.LogTypeUnlock, model.LogTypeCheckin, model.LogTypeQuotaExpiry:
+		return true
+	default:
+		return false
+	}
+}
+
+func RecordLogWithQuota(c *gin.Context) {
+	var req RecordLogWithQuotaRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		common.ApiError(c, err)
+		return
+	}
+
+	req.Content = strings.TrimSpace(req.Content)
+	if req.Content == "" {
+		common.ApiErrorMsg(c, "content 不能为空")
+		return
+	}
+	if !isSupportedLogType(req.LogType) {
+		common.ApiErrorMsg(c, "log_type 非法")
+		return
+	}
+	if req.LogType == model.LogTypeConsume && !common.LogConsumeEnabled {
+		common.ApiErrorMsg(c, "消费日志未启用")
+		return
+	}
+	if _, err := model.GetUserById(req.UserId, false); err != nil {
+		common.ApiError(c, err)
+		return
+	}
+
+	model.RecordLogWithQuota(req.UserId, req.LogType, req.Quota, req.Content, req.Other)
+	common.ApiSuccess(c, nil)
+}
 
 func GetAllLogs(c *gin.Context) {
 	pageInfo := common.GetPageQuery(c)

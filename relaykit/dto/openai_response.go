@@ -144,7 +144,18 @@ type FunctionResponse struct {
 	Arguments  string `json:"arguments"`            // response
 }
 
+type MetaInfo struct {
+	ToolCalls []MetaInfoToolCall `json:"tool_calls,omitempty"`
+}
+
+type MetaInfoToolCall struct {
+	ToolCallResponse
+	ChoiceIndex *int `json:"choice_index,omitempty"`
+}
+
 type ChatCompletionsStreamResponse struct {
+	Type              string                                `json:"type,omitempty"`
+	MetaInfo          *MetaInfo                             `json:"metainfo,omitempty"`
 	Id                string                                `json:"id"`
 	Object            string                                `json:"object"`
 	Created           int64                                 `json:"created"`
@@ -192,6 +203,8 @@ func (c *ChatCompletionsStreamResponse) Copy() *ChatCompletionsStreamResponse {
 	choices := make([]ChatCompletionsStreamResponseChoice, len(c.Choices))
 	copy(choices, c.Choices)
 	return &ChatCompletionsStreamResponse{
+		Type:              c.Type,
+		MetaInfo:          c.MetaInfo,
 		Id:                c.Id,
 		Object:            c.Object,
 		Created:           c.Created,
@@ -226,13 +239,14 @@ type CompletionsStreamResponse struct {
 }
 
 type Usage struct {
-	PromptTokens         int           `json:"prompt_tokens"`
-	CompletionTokens     int           `json:"completion_tokens"`
-	TotalTokens          int           `json:"total_tokens"`
-	PromptCacheHitTokens int           `json:"prompt_cache_hit_tokens,omitempty"`
-	UsageSemantic        string        `json:"usage_semantic,omitempty"`
-	UsageSource          string        `json:"usage_source,omitempty"`
-	BillingUsage         *BillingUsage `json:"billing_usage,omitempty"`
+	ToolUsage            map[string]int `json:"tool_usage,omitempty"`
+	PromptTokens         int            `json:"prompt_tokens"`
+	CompletionTokens     int            `json:"completion_tokens"`
+	TotalTokens          int            `json:"total_tokens"`
+	PromptCacheHitTokens int            `json:"prompt_cache_hit_tokens,omitempty"`
+	UsageSemantic        string         `json:"usage_semantic,omitempty"`
+	UsageSource          string         `json:"usage_source,omitempty"`
+	BillingUsage         *BillingUsage  `json:"billing_usage,omitempty"`
 
 	PromptTokensDetails    InputTokenDetails  `json:"prompt_tokens_details"`
 	CompletionTokenDetails OutputTokenDetails `json:"completion_tokens_details"`

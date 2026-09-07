@@ -27,6 +27,7 @@ import {
 } from './section-registry.tsx'
 
 const defaultOperationsSettings: OperationsSettings = {
+  'quota_expiry_setting.rules': '[]',
   DefaultCollapseSidebar: false,
   DemoSiteEnabled: false,
   SelfUseModeEnabled: false,

@@ -49,6 +49,9 @@ func TestMain(m *testing.M) {
 		&model.User{},
 		&model.Token{},
 		&model.Log{},
+		&model.LogQuotaExpiry{},
+		&model.QuotaExpiryRuntimeState{},
+		&model.QuotaExpiryReplayLog{},
 		&model.Channel{},
 		&model.Midjourney{},
 		&model.TopUp{},
@@ -73,6 +76,9 @@ func truncate(t *testing.T) {
 		model.DB.Exec("DELETE FROM users")
 		model.DB.Exec("DELETE FROM tokens")
 		model.DB.Exec("DELETE FROM logs")
+		model.DB.Exec("DELETE FROM log_quota_expiries")
+		model.DB.Exec("DELETE FROM quota_expiry_runtime_states")
+		model.DB.Exec("DELETE FROM quota_expiry_replay_logs")
 		model.DB.Exec("DELETE FROM channels")
 		model.DB.Exec("DELETE FROM midjourneys")
 		model.DB.Exec("DELETE FROM top_ups")
