@@ -2,6 +2,7 @@ package model
 
 import (
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 
@@ -20,6 +21,20 @@ type LogQuotaExpiry struct {
 	ExpireAt      int64  `gorm:"index:idx_expire_status,priority:1;index:idx_lqe_status_expire_id,priority:2;not null"`
 	Status        string `gorm:"type:varchar(16);default:'pending';index:idx_user_status_created,priority:2;index:idx_expire_status,priority:2;index:idx_lqe_status_expire_id,priority:1"`
 	CreatedAt     int64  `gorm:"index:idx_user_status_created,priority:3;index:idx_lqe_user_created_id,priority:2"`
+	VoidQuota     int    `gorm:"not null;default:0"`
+	ProcessedAt   int64  `gorm:"not null;default:0"`
+	VoidLogID     int    `gorm:"not null;default:0"`
+	CachePending  bool   `gorm:"not null;default:false"`
+}
+
+// QuotaExpiryLogOutbox lives in the log database. It commits with the source
+// log, so a main-database failure cannot lose the accounting event.
+type QuotaExpiryLogOutbox struct {
+	LogId        int `gorm:"primaryKey;autoIncrement:false"`
+	UserId       int
+	LogType      int
+	Quota        int
+	LogCreatedAt int64
 }
 
 type QuotaExpiryRuntimeState struct {
@@ -71,6 +86,7 @@ const (
 
 	QuotaExpiryRuntimeModeNormal     = "normal"
 	QuotaExpiryRuntimeModeRebuilding = "rebuilding"
+	QuotaExpiryRuntimeModeFailed     = "failed"
 
 	QuotaExpiryReplayStatusPending   = "pending"
 	QuotaExpiryReplayStatusProcessed = "processed"
@@ -144,7 +160,7 @@ func QuotaExpiryRebuildRunning() (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	return state.Mode == QuotaExpiryRuntimeModeRebuilding, nil
+	return state.Mode != QuotaExpiryRuntimeModeNormal, nil
 }
 
 func quotaExpiryDayStart(ts int64) int64 {
@@ -206,17 +222,136 @@ func HandleQuotaExpiryLog(log *Log) error {
 			return err
 		}
 
-		if state.Mode != QuotaExpiryRuntimeModeRebuilding {
-			return applyQuotaExpiryLogWithDB(tx, log)
+		return handleQuotaExpiryLogWithState(tx, state, log)
+	})
+}
+
+// Serialize log creation with rebuild snapshots, so attribution cannot arrive
+// before its grant or be counted both by the snapshot and a delayed callback.
+func createLogWithQuotaExpiry(log *Log) error {
+	if !isQuotaExpiryTrackedLog(log) {
+		return createLog(log)
+	}
+	// ClickHouse has no transactional outbox or stable relational log ID.
+	// Preserve its existing append-and-attribute path for consumption logs.
+	if common.UsingLogDatabase(common.DatabaseTypeClickHouse) {
+		if err := createLog(log); err != nil {
+			return err
 		}
-		if log.CreatedAt < state.StartTime || log.Id <= 0 {
-			return applyQuotaExpiryLogWithDB(tx, log)
+		return HandleQuotaExpiryLog(log)
+	}
+	var delivered []int
+	err := DB.Transaction(func(tx *gorm.DB) error {
+		state, err := lockQuotaExpiryRuntimeState(tx)
+		if err != nil {
+			return err
 		}
-		if log.Id <= state.SnapshotMaxLogID {
-			return nil
+		ensureLogRequestId(log)
+		if LOG_DB == DB {
+			if err := tx.Create(log).Error; err != nil {
+				return err
+			}
+			return handleQuotaExpiryLogWithState(tx, state, log)
+		}
+		if err := LOG_DB.Transaction(func(logTx *gorm.DB) error {
+			if err := logTx.Create(log).Error; err != nil {
+				return err
+			}
+			return logTx.Create(&QuotaExpiryLogOutbox{
+				LogId: log.Id, UserId: log.UserId, LogType: log.Type,
+				Quota: log.Quota, LogCreatedAt: log.CreatedAt,
+			}).Error
+		}); err != nil {
+			return err
+		}
+		// Older failed events must retain their FIFO share before this event.
+		delivered, err = deliverQuotaExpiryLogOutbox(tx, state)
+		return err
+	})
+	if err != nil {
+		return err
+	}
+	return acknowledgeQuotaExpiryLogOutbox(delivered)
+}
+
+func handleQuotaExpiryLogWithState(tx *gorm.DB, state *QuotaExpiryRuntimeState, log *Log) error {
+	if log.Id > 0 && log.Id <= state.SnapshotMaxLogID {
+		return nil
+	}
+	if state.Mode != QuotaExpiryRuntimeModeNormal {
+		if log.Id <= 0 {
+			return fmt.Errorf("quota expiry accounting requires a persisted log during rebuild")
 		}
 		return enqueueQuotaExpiryReplayLog(tx, state.JobId, log)
-	})
+	}
+	if log.Id <= 0 {
+		return applyQuotaExpiryLogWithDB(tx, log)
+	}
+	if err := enqueueQuotaExpiryReplayLog(tx, "", log); err != nil {
+		return err
+	}
+	var receipt QuotaExpiryReplayLog
+	if err := tx.Where("log_id = ?", log.Id).First(&receipt).Error; err != nil {
+		return err
+	}
+	if receipt.Status == QuotaExpiryReplayStatusProcessed {
+		return nil
+	}
+	if err := applyQuotaExpiryLogWithDB(tx, log); err != nil {
+		return err
+	}
+	return tx.Model(&receipt).Update("status", QuotaExpiryReplayStatusProcessed).Error
+}
+
+// When detailed consumption logging is disabled, keep the accounting event
+// needed to rebuild expiring grants, without request or response details.
+func recordQuotaExpiryConsumption(log *Log) {
+	if !isQuotaExpiryTrackedLog(log) {
+		return
+	}
+	if len(operation_setting.GetLogTypeExpireDaysMap()) == 0 {
+		var pending int64
+		err := DB.Model(&LogQuotaExpiry{}).Where("user_id = ? AND status = ?", log.UserId, LogQuotaExpiryStatusPending).Limit(1).Count(&pending).Error
+		if err != nil {
+			common.SysError("failed to check quota expiry accounting: " + err.Error())
+			return
+		}
+		if pending == 0 {
+			return
+		}
+	}
+	// Subscription events were excluded above; no other metadata is needed
+	// for wallet accounting when detailed logs are disabled.
+	log.Other = ""
+	if err := createLogWithQuotaExpiry(log); err != nil {
+		common.SysError("failed to record quota expiry consumption: " + err.Error())
+	}
+}
+
+func ValidateQuotaExpiryRulesJSON(value string) error {
+	var rules []operation_setting.LogTypeExpiryRule
+	if err := common.UnmarshalJsonStr(value, &rules); err != nil {
+		return fmt.Errorf("invalid quota expiry rules: %w", err)
+	}
+	if rules == nil {
+		return fmt.Errorf("quota expiry rules must be an array")
+	}
+	seen := make(map[int]bool, len(rules))
+	for _, rule := range rules {
+		if strings.TrimSpace(rule.Label) == "" || rule.ExpireDays <= 0 || rule.ExpireDays > operation_setting.MaxQuotaExpiryDays {
+			return fmt.Errorf("quota expiry rules require a label and an expiry of 1 to 36500 days")
+		}
+		switch rule.LogType {
+		case LogTypeSystem, LogTypeActive, LogTypeCheckin:
+		default:
+			return fmt.Errorf("log type %d is not a quota grant", rule.LogType)
+		}
+		if seen[rule.LogType] {
+			return fmt.Errorf("duplicate quota expiry log type %d", rule.LogType)
+		}
+		seen[rule.LogType] = true
+	}
+	return nil
 }
 
 func isQuotaExpiryTrackedLog(log *Log) bool {
@@ -224,9 +359,20 @@ func isQuotaExpiryTrackedLog(log *Log) bool {
 		return false
 	}
 	if IsQuotaConsumeLogType(log.Type) {
-		return true
+		var other struct {
+			BillingSource string `json:"billing_source"`
+		}
+		if log.Other != "" {
+			_ = common.UnmarshalJsonStr(log.Other, &other)
+		}
+		return other.BillingSource != "subscription"
 	}
-	return operation_setting.GetExpireDaysForLogType(log.Type) > 0
+	switch log.Type {
+	case LogTypeSystem, LogTypeActive, LogTypeCheckin:
+		return operation_setting.GetExpireDaysForLogType(log.Type) > 0
+	default:
+		return false
+	}
 }
 
 func applyQuotaExpiryLogWithDB(db *gorm.DB, log *Log) error {
@@ -237,7 +383,7 @@ func applyQuotaExpiryLogWithDB(db *gorm.DB, log *Log) error {
 		log.CreatedAt = common.GetTimestamp()
 	}
 	if IsQuotaConsumeLogType(log.Type) {
-		return applyConsumeToExpiriesWithDB(db, log.UserId, log.Quota, log.CreatedAt)
+		return applyConsumeToExpiriesWithDB(db, log.UserId, log.Quota, log.CreatedAt, log.Id)
 	}
 
 	days := operation_setting.GetExpireDaysForLogType(log.Type)
@@ -278,10 +424,10 @@ func enqueueQuotaExpiryReplayLog(tx *gorm.DB, jobID string, log *Log) error {
 
 // ApplyConsumeToExpiries 将本次消费额度按 FIFO 归因到各批次
 func ApplyConsumeToExpiries(userId int, consumeQuota int, consumeAt int64) error {
-	return applyConsumeToExpiriesWithDB(DB, userId, consumeQuota, consumeAt)
+	return HandleQuotaExpiryLog(&Log{UserId: userId, Type: LogTypeConsume, Quota: consumeQuota, CreatedAt: consumeAt})
 }
 
-func applyConsumeToExpiriesWithDB(db *gorm.DB, userId int, consumeQuota int, consumeAt int64) error {
+func applyConsumeToExpiriesWithDB(db *gorm.DB, userId int, consumeQuota int, consumeAt int64, consumeLogID int) error {
 	if consumeQuota <= 0 {
 		return nil
 	}
@@ -294,15 +440,17 @@ func applyConsumeToExpiriesWithDB(db *gorm.DB, userId int, consumeQuota int, con
 	consumeDayStart := quotaExpiryDayStart(consumeAt)
 	for remaining > 0 {
 		var batch LogQuotaExpiry
-		err := db.Where(
+		query := db.Where(
 			"user_id = ? AND status = ? AND created_at <= ? AND expire_at > ? AND original_quota > consumed_quota",
 			userId,
 			LogQuotaExpiryStatusPending,
 			consumeAt,
 			consumeDayStart,
-		).
-			Order("created_at ASC, id ASC").
-			First(&batch).Error
+		)
+		if consumeLogID > 0 {
+			query = query.Where("created_at < ? OR (created_at = ? AND log_id < ?)", consumeAt, consumeAt, consumeLogID)
+		}
+		err := query.Order("created_at ASC, log_id ASC").First(&batch).Error
 		if err == gorm.ErrRecordNotFound {
 			return nil
 		}
@@ -374,18 +522,26 @@ func processQuotaExpiry(id int, reason string) (int, bool, error) {
 	userId := 0
 	expireAt := int64(0)
 	claimed := false
+	var delivered []int
 
 	err := DB.Transaction(func(tx *gorm.DB) error {
 		state, err := lockQuotaExpiryRuntimeState(tx)
 		if err != nil {
 			return err
 		}
-		if state.Mode == QuotaExpiryRuntimeModeRebuilding {
+		if state.Mode != QuotaExpiryRuntimeModeNormal {
 			return nil
 		}
 
+		if LOG_DB != DB && !common.UsingLogDatabase(common.DatabaseTypeClickHouse) {
+			delivered, err = deliverQuotaExpiryLogOutbox(tx, state)
+			if err != nil {
+				return err
+			}
+		}
+
 		result := tx.Model(&LogQuotaExpiry{}).
-			Where("id = ? AND status = ?", id, LogQuotaExpiryStatusPending).
+			Where("id = ? AND status = ? AND expire_at <= ?", id, LogQuotaExpiryStatusPending, quotaExpiryDayStart(common.GetTimestamp())).
 			Update("status", LogQuotaExpiryStatusProcessing)
 		if result.Error != nil {
 			return result.Error
@@ -401,30 +557,48 @@ func processQuotaExpiry(id int, reason string) (int, bool, error) {
 		}
 		userId = expiry.UserId
 		expireAt = expiry.ExpireAt
-		voidQuota = expiry.OriginalQuota - expiry.ConsumedQuota
+		voidQuota = max(0, expiry.OriginalQuota-expiry.ConsumedQuota)
 		if voidQuota > 0 {
-			if err := tx.Model(&User{}).
-				Where("id = ?", expiry.UserId).
+			var user User
+			if err := lockForUpdate(tx).First(&user, expiry.UserId).Error; err != nil {
+				return err
+			}
+			voidQuota = max(0, min(voidQuota, user.Quota))
+			if err := tx.Model(&User{}).Where("id = ?", user.Id).
 				Update("quota", gorm.Expr("quota - ?", voidQuota)).Error; err != nil {
 				return err
 			}
 		}
-		return tx.Model(&LogQuotaExpiry{}).
-			Where("id = ?", id).
-			Update("status", LogQuotaExpiryStatusProcessed).Error
+		expiry.VoidQuota = max(0, voidQuota)
+		expiry.CachePending = common.RedisEnabled && expiry.VoidQuota > 0
+		expiry.ProcessedAt = common.GetTimestamp()
+		expiry.Status = LogQuotaExpiryStatusProcessed
+		if LOG_DB == DB && expiry.VoidQuota > 0 {
+			log, err := quotaExpiryVoidLog(tx, &expiry)
+			if err != nil {
+				return err
+			}
+			if err := tx.Create(log).Error; err != nil {
+				return err
+			}
+			expiry.VoidLogID = log.Id
+		}
+		return tx.Save(&expiry).Error
 	})
 	if err != nil {
 		return 0, false, err
 	}
+	if err := acknowledgeQuotaExpiryLogOutbox(delivered); err != nil {
+		common.SysError("failed to acknowledge expiry accounting: " + err.Error())
+	}
 	if !claimed {
 		return 0, false, nil
 	}
-	if voidQuota > 0 && common.RedisEnabled {
-		go func() {
-			if err := cacheDecrUserQuota(userId, int64(voidQuota)); err != nil {
-				common.SysLog("failed to decrease user quota cache: " + err.Error())
-			}
-		}()
+	if err := syncQuotaExpiryCache(id, true); err != nil {
+		return voidQuota, true, err
+	}
+	if err := FlushQuotaExpiryVoidLogs(); err != nil {
+		return voidQuota, true, err
 	}
 	common.SysLog(fmt.Sprintf("quota expiry processed: reason=%s expiry_id=%d user_id=%d expire_date=%s void_quota=%d", reason, id, userId, quotaExpiryDateOnly(expireAt), voidQuota))
 	return voidQuota, true, nil
@@ -432,6 +606,9 @@ func processQuotaExpiry(id int, reason string) (int, bool, error) {
 
 func processExpiredExpiriesFromDate(startTime int64) (*RebuildQuotaExpiryStats, error) {
 	stats := &RebuildQuotaExpiryStats{}
+	if err := FlushQuotaExpiryVoidLogs(); err != nil {
+		return nil, err
+	}
 	currentDayStart := quotaExpiryDayStart(common.GetTimestamp())
 	for {
 		var pendingExpiries []*LogQuotaExpiry
@@ -451,6 +628,7 @@ func processExpiredExpiriesFromDate(startTime int64) (*RebuildQuotaExpiryStats, 
 			break
 		}
 
+		processedInBatch := 0
 		for _, expiry := range pendingExpiries {
 			voidQuota, processed, err := ProcessQuotaExpiryWithReason(expiry.Id, "rebuild_init")
 			if err != nil {
@@ -460,27 +638,19 @@ func processExpiredExpiriesFromDate(startTime int64) (*RebuildQuotaExpiryStats, 
 				continue
 			}
 			stats.ProcessedExpiredCount++
+			processedInBatch++
 			stats.ProcessedExpiredVoidQuota += int64(voidQuota)
 			if voidQuota <= 0 {
 				continue
 			}
-			RecordQuotaExpiryVoidLog(expiry.UserId, voidQuota)
 			stats.GeneratedExpiryLogCount++
 		}
 
-		if len(pendingExpiries) < quotaExpiryRebuildUpdateBatchSize {
+		if len(pendingExpiries) < quotaExpiryRebuildUpdateBatchSize || processedInBatch == 0 {
 			break
 		}
 	}
 	return stats, nil
-}
-
-func RecordQuotaExpiryVoidLog(userId int, voidQuota int) {
-	if voidQuota <= 0 {
-		return
-	}
-	content := fmt.Sprintf("有效期到期-%d额度作废", voidQuota)
-	recordLogWithQuota(userId, LogTypeQuotaExpiry, voidQuota, content, false)
 }
 
 // RebuildExpiriesFromDate 从指定日期开始按快照重建 expiry 记录。
@@ -493,7 +663,17 @@ func RebuildExpiriesFromDateWithProgress(startTime int64, logTypeExpireDays map[
 	return RebuildExpiriesFromDateWithProgressAndJobID(startTime, logTypeExpireDays, jobID, progress)
 }
 
-func RebuildExpiriesFromDateWithProgressAndJobID(startTime int64, logTypeExpireDays map[int]int, jobID string, progress RebuildQuotaExpiryProgress) (*RebuildQuotaExpiryStats, error) {
+func RebuildExpiriesFromDateWithProgressAndJobID(startTime int64, logTypeExpireDays map[int]int, jobID string, progress RebuildQuotaExpiryProgress) (_ *RebuildQuotaExpiryStats, rebuildErr error) {
+	for logType, days := range logTypeExpireDays {
+		if days <= 0 || days > operation_setting.MaxQuotaExpiryDays {
+			return nil, fmt.Errorf("invalid expiry days for log type %d", logType)
+		}
+		switch logType {
+		case LogTypeSystem, LogTypeActive, LogTypeCheckin:
+		default:
+			return nil, fmt.Errorf("log type %d is not a quota grant", logType)
+		}
+	}
 	if jobID == "" {
 		jobID = fmt.Sprintf("rebuild_%d", time.Now().UnixNano())
 	}
@@ -509,25 +689,36 @@ func RebuildExpiriesFromDateWithProgressAndJobID(startTime int64, logTypeExpireD
 	if err != nil {
 		return nil, err
 	}
+	// Only an incomplete attribution rebuild must pause expiration. After
+	// finalization, expiration failures can be retried by the normal scheduler.
+	defer func() {
+		if rebuildErr != nil {
+			if err := DB.Model(&QuotaExpiryRuntimeState{}).
+				Where("id = ? AND job_id = ? AND mode = ?", quotaExpiryRuntimeStateID, jobID, QuotaExpiryRuntimeModeRebuilding).
+				Update("mode", QuotaExpiryRuntimeModeFailed).Error; err != nil {
+				common.SysError("failed to mark quota expiry rebuild failure: " + err.Error())
+			}
+		}
+	}()
 	stats.SnapshotMaxLogID = snapshotMaxLogID
 	report("snapshot")
 
 	logTypes := logTypesFromExpireDays(logTypeExpireDays)
 	if len(logTypes) > 0 {
-		if err := rebuildExpiriesFromLogs(startTime, snapshotMaxLogID, logTypeExpireDays, logTypes, stats, report); err != nil {
+		if err := rebuildExpiriesFromLogs(jobID, startTime, snapshotMaxLogID, logTypeExpireDays, logTypes, stats, report); err != nil {
 			return nil, err
 		}
 	}
 
 	report("cleaning_stale")
-	deleted, err := cleanupStaleExpiriesFromDate(startTime, snapshotMaxLogID, logTypes)
+	deleted, err := cleanupStaleExpiriesFromDate(jobID, startTime, snapshotMaxLogID, logTypes)
 	if err != nil {
 		return nil, err
 	}
 	stats.DeletedStaleCount = deleted
 	report("rebuilding_users")
 
-	if err := rebuildAffectedUsersFromDate(startTime, snapshotMaxLogID, stats, report); err != nil {
+	if err := rebuildAffectedUsersFromDate(jobID, startTime, snapshotMaxLogID, stats, report); err != nil {
 		return nil, err
 	}
 
@@ -561,8 +752,12 @@ func beginQuotaExpiryRebuild(startTime int64, jobID string) (int, error) {
 		if err != nil {
 			return err
 		}
-		if state.Mode == QuotaExpiryRuntimeModeRebuilding {
+		if state.Mode == QuotaExpiryRuntimeModeRebuilding && common.GetTimestamp()-state.UpdatedAt < quotaExpiryRebuildLeaseSeconds {
 			return fmt.Errorf("quota expiry rebuild already running: job_id=%s snapshot_max_log_id=%d", state.JobId, state.SnapshotMaxLogID)
+		}
+
+		if state.Mode != QuotaExpiryRuntimeModeNormal && startTime > state.StartTime {
+			return fmt.Errorf("retry the failed rebuild from its original start date or earlier")
 		}
 
 		snapshotDB := LOG_DB
@@ -574,6 +769,19 @@ func beginQuotaExpiryRebuild(startTime int64, jobID string) (int, error) {
 			return fmt.Errorf("failed to query rebuild snapshot: %w", err)
 		}
 
+		if LOG_DB != DB && !common.UsingLogDatabase(common.DatabaseTypeClickHouse) {
+			if _, err := deliverQuotaExpiryLogOutbox(tx, state); err != nil {
+				return err
+			}
+		}
+
+		// Snapshot events are covered by reconstruction. Keep their receipts:
+		// a split-database acknowledgement may still be retried after this
+		// rebuild, even if log retention later lowers the snapshot maximum.
+		if err := tx.Model(&QuotaExpiryReplayLog{}).Where("log_id <= ?", snapshot).
+			Update("status", QuotaExpiryReplayStatusProcessed).Error; err != nil {
+			return err
+		}
 		state.Mode = QuotaExpiryRuntimeModeRebuilding
 		state.JobId = jobID
 		state.StartTime = startTime
@@ -612,8 +820,6 @@ func finishQuotaExpiryRebuild(jobID string, stats *RebuildQuotaExpiryStats) erro
 
 		state.Mode = QuotaExpiryRuntimeModeNormal
 		state.JobId = ""
-		state.StartTime = 0
-		state.SnapshotMaxLogID = 0
 		state.UpdatedAt = common.GetTimestamp()
 		return tx.Save(state).Error
 	})
@@ -630,7 +836,7 @@ func finishQuotaExpiryRebuild(jobID string, stats *RebuildQuotaExpiryStats) erro
 func drainQuotaExpiryReplayLogs(jobID string, stats *RebuildQuotaExpiryStats, maxBatches int, report func(string)) error {
 	for batches := 0; maxBatches <= 0 || batches < maxBatches; batches++ {
 		processed := 0
-		err := DB.Transaction(func(tx *gorm.DB) error {
+		err := quotaExpiryRebuildTransaction(jobID, func(tx *gorm.DB) error {
 			var err error
 			processed, err = drainQuotaExpiryReplayLogBatchWithDB(tx, jobID)
 			return err
@@ -726,7 +932,7 @@ func logTypesFromExpireDays(logTypeExpireDays map[int]int) []int {
 	return logTypes
 }
 
-func rebuildExpiriesFromLogs(startTime int64, snapshotMaxLogID int, logTypeExpireDays map[int]int, logTypes []int, stats *RebuildQuotaExpiryStats, report func(string)) error {
+func rebuildExpiriesFromLogs(jobID string, startTime int64, snapshotMaxLogID int, logTypeExpireDays map[int]int, logTypes []int, stats *RebuildQuotaExpiryStats, report func(string)) error {
 	lastID := 0
 	for {
 		var logs []*Log
@@ -764,7 +970,7 @@ func rebuildExpiriesFromLogs(startTime int64, snapshotMaxLogID int, logTypeExpir
 		}
 
 		if len(expiries) > 0 {
-			if err := upsertLogQuotaExpiryBatch(expiries); err != nil {
+			if err := quotaExpiryRebuildTransaction(jobID, func(tx *gorm.DB) error { return upsertLogQuotaExpiryBatchWithDB(tx, expiries) }); err != nil {
 				return fmt.Errorf("failed to upsert expiries: %w", err)
 			}
 			stats.RebuiltExpiryCount += len(expiries)
@@ -779,12 +985,30 @@ func rebuildExpiriesFromLogs(startTime int64, snapshotMaxLogID int, logTypeExpir
 	return nil
 }
 
-func upsertLogQuotaExpiryBatch(expiries []*LogQuotaExpiry) error {
-	return upsertLogQuotaExpiryBatchWithDB(DB, expiries)
-}
-
 func upsertLogQuotaExpiryBatchWithDB(db *gorm.DB, expiries []*LogQuotaExpiry) error {
 	if len(expiries) == 0 {
+		return nil
+	}
+	logIDs := make([]int, 0, len(expiries))
+	for _, expiry := range expiries {
+		logIDs = append(logIDs, expiry.LogId)
+	}
+	var processedIDs []int
+	if err := db.Model(&LogQuotaExpiry{}).Where("log_id IN ? AND status <> ?", logIDs, LogQuotaExpiryStatusPending).
+		Pluck("log_id", &processedIDs).Error; err != nil {
+		return err
+	}
+	processed := make(map[int]bool, len(processedIDs))
+	for _, id := range processedIDs {
+		processed[id] = true
+	}
+	pending := make([]*LogQuotaExpiry, 0, len(expiries))
+	for _, expiry := range expiries {
+		if !processed[expiry.LogId] {
+			pending = append(pending, expiry)
+		}
+	}
+	if len(pending) == 0 {
 		return nil
 	}
 	return db.Clauses(clause.OnConflict{
@@ -795,74 +1019,77 @@ func upsertLogQuotaExpiryBatchWithDB(db *gorm.DB, expiries []*LogQuotaExpiry) er
 			"expire_at",
 			"created_at",
 		}),
-	}).CreateInBatches(expiries, quotaExpiryRebuildLogBatchSize).Error
+	}).CreateInBatches(pending, quotaExpiryRebuildLogBatchSize).Error
 }
 
-func cleanupStaleExpiriesFromDate(startTime int64, snapshotMaxLogID int, logTypes []int) (int, error) {
-	if snapshotMaxLogID <= 0 {
-		return 0, nil
-	}
-
+func cleanupStaleExpiriesFromDate(jobID string, startTime int64, snapshotMaxLogID int, logTypes []int) (int, error) {
 	deleted := 0
-	lastID := 0
-	for {
-		var expiries []*LogQuotaExpiry
-		err := DB.
-			Select("id", "log_id").
-			Where("id > ? AND created_at >= ? AND log_id <= ?", lastID, startTime, snapshotMaxLogID).
-			Order("id ASC").
-			Limit(quotaExpiryRebuildLogBatchSize).
-			Find(&expiries).Error
-		if err != nil {
-			return deleted, fmt.Errorf("failed to query stale expiry candidates: %w", err)
+	err := quotaExpiryRebuildTransaction(jobID, func(tx *gorm.DB) error {
+		logDB := LOG_DB
+		if LOG_DB == DB {
+			logDB = tx
 		}
-		if len(expiries) == 0 {
-			break
-		}
-		lastID = expiries[len(expiries)-1].Id
-
-		logIDs := make([]int, 0, len(expiries))
-		for _, expiry := range expiries {
-			logIDs = append(logIDs, expiry.LogId)
-		}
-
-		validLogIDs := map[int]struct{}{}
-		if len(logTypes) > 0 {
-			var ids []int
-			err = LOG_DB.Model(&Log{}).
-				Where("id IN ? AND id <= ? AND created_at >= ? AND type IN ? AND quota > 0", logIDs, snapshotMaxLogID, startTime, logTypes).
-				Pluck("id", &ids).Error
+		lastID := 0
+		for {
+			var expiries []*LogQuotaExpiry
+			err := tx.
+				Select("id", "log_id").
+				Where("id > ? AND created_at >= ? AND status = ?", lastID, startTime, LogQuotaExpiryStatusPending).
+				Order("id ASC").
+				Limit(quotaExpiryRebuildLogBatchSize).
+				Find(&expiries).Error
 			if err != nil {
-				return deleted, fmt.Errorf("failed to query valid log ids: %w", err)
+				return fmt.Errorf("failed to query stale expiry candidates: %w", err)
 			}
-			for _, id := range ids {
-				validLogIDs[id] = struct{}{}
+			if len(expiries) == 0 {
+				break
+			}
+			lastID = expiries[len(expiries)-1].Id
+
+			logIDs := make([]int, 0, len(expiries))
+			for _, expiry := range expiries {
+				logIDs = append(logIDs, expiry.LogId)
+			}
+
+			validLogIDs := map[int]struct{}{}
+			if len(logTypes) > 0 {
+				var ids []int
+				err = logDB.Model(&Log{}).
+					Where("id IN ? AND id <= ? AND created_at >= ? AND type IN ? AND quota > 0", logIDs, snapshotMaxLogID, startTime, logTypes).
+					Pluck("id", &ids).Error
+				if err != nil {
+					return fmt.Errorf("failed to query valid log ids: %w", err)
+				}
+				for _, id := range ids {
+					validLogIDs[id] = struct{}{}
+				}
+			}
+
+			staleIDs := make([]int, 0)
+			for _, expiry := range expiries {
+				if _, ok := validLogIDs[expiry.LogId]; !ok {
+					staleIDs = append(staleIDs, expiry.Id)
+				}
+			}
+			if len(staleIDs) > 0 {
+				result := tx.Where("id IN ?", staleIDs).Delete(&LogQuotaExpiry{})
+				if result.Error != nil {
+					return fmt.Errorf("failed to delete stale expiries: %w", result.Error)
+				}
+				deleted += int(result.RowsAffected)
+			}
+
+			if len(expiries) < quotaExpiryRebuildLogBatchSize {
+				break
 			}
 		}
 
-		staleIDs := make([]int, 0)
-		for _, expiry := range expiries {
-			if _, ok := validLogIDs[expiry.LogId]; !ok {
-				staleIDs = append(staleIDs, expiry.Id)
-			}
-		}
-		if len(staleIDs) > 0 {
-			result := DB.Where("id IN ?", staleIDs).Delete(&LogQuotaExpiry{})
-			if result.Error != nil {
-				return deleted, fmt.Errorf("failed to delete stale expiries: %w", result.Error)
-			}
-			deleted += int(result.RowsAffected)
-		}
-
-		if len(expiries) < quotaExpiryRebuildLogBatchSize {
-			break
-		}
-	}
-
-	return deleted, nil
+		return nil
+	})
+	return deleted, err
 }
 
-func rebuildAffectedUsersFromDate(startTime int64, snapshotMaxLogID int, stats *RebuildQuotaExpiryStats, report func(string)) error {
+func rebuildAffectedUsersFromDate(jobID string, startTime int64, snapshotMaxLogID int, stats *RebuildQuotaExpiryStats, report func(string)) error {
 	if snapshotMaxLogID <= 0 {
 		return nil
 	}
@@ -871,7 +1098,7 @@ func rebuildAffectedUsersFromDate(startTime int64, snapshotMaxLogID int, stats *
 	for {
 		var userBatch []int
 		err := DB.Model(&LogQuotaExpiry{}).
-			Where("created_at >= ? AND log_id <= ? AND user_id > ?", startTime, snapshotMaxLogID, lastUserID).
+			Where("(created_at >= ? OR status = ?) AND log_id <= ? AND user_id > ?", startTime, LogQuotaExpiryStatusPending, snapshotMaxLogID, lastUserID).
 			Distinct("user_id").
 			Order("user_id ASC").
 			Limit(quotaExpiryRebuildUserBatchSize).
@@ -884,7 +1111,7 @@ func rebuildAffectedUsersFromDate(startTime int64, snapshotMaxLogID int, stats *
 		}
 
 		stats.AffectedUserCount += len(userBatch)
-		if err := rebuildAffectedUserBatch(userBatch, startTime, snapshotMaxLogID, stats); err != nil {
+		if err := rebuildAffectedUserBatch(jobID, userBatch, snapshotMaxLogID, stats); err != nil {
 			return err
 		}
 		lastUserID = userBatch[len(userBatch)-1]
@@ -899,7 +1126,7 @@ func rebuildAffectedUsersFromDate(startTime int64, snapshotMaxLogID int, stats *
 	return nil
 }
 
-func rebuildAffectedUserBatch(userIDs []int, startTime int64, snapshotMaxLogID int, stats *RebuildQuotaExpiryStats) error {
+func rebuildAffectedUserBatch(jobID string, userIDs []int, snapshotMaxLogID int, stats *RebuildQuotaExpiryStats) error {
 	workers := quotaExpiryRebuildWorkerCount()
 	if workers > len(userIDs) {
 		workers = len(userIDs)
@@ -919,7 +1146,7 @@ func rebuildAffectedUserBatch(userIDs []int, startTime int64, snapshotMaxLogID i
 		go func() {
 			defer wg.Done()
 			for userID := range userCh {
-				updated, err := rebuildUserConsumedQuota(userID, startTime, snapshotMaxLogID)
+				updated, err := rebuildUserConsumedQuota(jobID, userID, snapshotMaxLogID)
 				mu.Lock()
 				if err != nil {
 					failed++
@@ -938,13 +1165,12 @@ func rebuildAffectedUserBatch(userIDs []int, startTime int64, snapshotMaxLogID i
 	close(userCh)
 	wg.Wait()
 
-	if err := rebuildUsersUsedQuota(userIDs); err != nil {
-		return fmt.Errorf("failed to rebuild used_quota: %w", err)
-	}
-
 	stats.ProcessedUserCount += len(userIDs) - failed
 	stats.FailedUserCount += failed
 	stats.UpdatedConsumedCount += updatedConsumed
+	if failed > 0 {
+		return fmt.Errorf("failed to rebuild quota consumption for %d users", failed)
+	}
 	return nil
 }
 
@@ -962,12 +1188,18 @@ func quotaExpiryRebuildWorkerCount() int {
 	return workers
 }
 
-// rebuildUserConsumedQuota 重新计算指定用户从 startTime 开始的消费归因。
-func rebuildUserConsumedQuota(userId int, startTime int64, snapshotMaxLogID int) (int, error) {
+// rebuildUserConsumedQuota replays existing batches as well as newly rebuilt
+// grants, so older pending grants retain their FIFO share during retries.
+func rebuildUserConsumedQuota(jobID string, userId int, snapshotMaxLogID int) (int, error) {
+	var earliestCreatedAt int64
+	if err := DB.Model(&LogQuotaExpiry{}).Where("user_id = ? AND log_id <= ?", userId, snapshotMaxLogID).
+		Select("COALESCE(MIN(created_at), 0)").Scan(&earliestCreatedAt).Error; err != nil {
+		return 0, err
+	}
 	var consumeLogs []*Log
 	err := LOG_DB.
-		Select("id", "quota", "created_at").
-		Where("id <= ? AND user_id = ? AND type IN ? AND created_at >= ? AND quota > 0", snapshotMaxLogID, userId, quotaConsumeLogTypes, startTime).
+		Select("id", "user_id", "type", "quota", "created_at", "other").
+		Where("id <= ? AND user_id = ? AND type IN ? AND created_at >= ? AND quota > 0", snapshotMaxLogID, userId, quotaConsumeLogTypes, earliestCreatedAt).
 		Order("created_at ASC, id ASC").
 		Find(&consumeLogs).Error
 	if err != nil {
@@ -975,11 +1207,11 @@ func rebuildUserConsumedQuota(userId int, startTime int64, snapshotMaxLogID int)
 	}
 
 	updated := 0
-	err = DB.Transaction(func(tx *gorm.DB) error {
+	err = quotaExpiryRebuildTransaction(jobID, func(tx *gorm.DB) error {
 		var expiries []*LogQuotaExpiry
 		err := tx.
-			Where("user_id = ? AND created_at >= ? AND log_id <= ?", userId, startTime, snapshotMaxLogID).
-			Order("created_at ASC, id ASC").
+			Where("user_id = ? AND log_id <= ?", userId, snapshotMaxLogID).
+			Order("created_at ASC, log_id ASC").
 			Find(&expiries).Error
 		if err != nil {
 			return err
@@ -998,7 +1230,10 @@ func rebuildUserConsumedQuota(userId int, startTime int64, snapshotMaxLogID int)
 		activeHead := 0
 		expiryIdx := 0
 		for _, log := range consumeLogs {
-			for expiryIdx < len(expiries) && expiries[expiryIdx].CreatedAt <= log.CreatedAt {
+			if !isQuotaExpiryTrackedLog(log) {
+				continue
+			}
+			for expiryIdx < len(expiries) && (expiries[expiryIdx].CreatedAt < log.CreatedAt || (expiries[expiryIdx].CreatedAt == log.CreatedAt && expiries[expiryIdx].LogId < log.Id)) {
 				active = append(active, expiries[expiryIdx])
 				expiryIdx++
 			}
@@ -1023,7 +1258,12 @@ func rebuildUserConsumedQuota(userId int, startTime int64, snapshotMaxLogID int)
 		}
 
 		for _, expiry := range expiries {
-			if oldConsumed[expiry.Id] == expiry.ConsumedQuota {
+			// Processed batches still absorb their historical FIFO consumption,
+			// but their settled accounting must never be rewritten.
+			// Log retention is not a refund. A partial history must never undo
+			// consumption already confirmed against a grant.
+			expiry.ConsumedQuota = max(oldConsumed[expiry.Id], expiry.ConsumedQuota)
+			if expiry.Status != LogQuotaExpiryStatusPending || oldConsumed[expiry.Id] == expiry.ConsumedQuota {
 				continue
 			}
 			err := tx.Model(&LogQuotaExpiry{}).
@@ -1038,41 +1278,4 @@ func rebuildUserConsumedQuota(userId int, startTime int64, snapshotMaxLogID int)
 		return nil
 	})
 	return updated, err
-}
-
-func rebuildUsersUsedQuota(userIDs []int) error {
-	if len(userIDs) == 0 {
-		return nil
-	}
-
-	type userQuotaTotal struct {
-		UserID int   `gorm:"column:user_id"`
-		Total  int64 `gorm:"column:total"`
-	}
-	var totals []userQuotaTotal
-	err := LOG_DB.Model(&Log{}).
-		Select("user_id, COALESCE(SUM(quota), 0) AS total").
-		Where("user_id IN ? AND type IN ?", userIDs, quotaConsumeLogTypes).
-		Group("user_id").
-		Scan(&totals).Error
-	if err != nil {
-		return err
-	}
-
-	totalByUserID := make(map[int]int, len(totals))
-	for _, total := range totals {
-		totalByUserID[total.UserID] = int(total.Total)
-	}
-
-	return DB.Transaction(func(tx *gorm.DB) error {
-		for _, userID := range userIDs {
-			err := tx.Model(&User{}).
-				Where("id = ?", userID).
-				Update("used_quota", totalByUserID[userID]).Error
-			if err != nil {
-				return err
-			}
-		}
-		return nil
-	})
 }

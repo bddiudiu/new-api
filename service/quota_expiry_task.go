@@ -30,7 +30,13 @@ func StartQuotaExpiryTask() {
 		}
 		gopool.Go(func() {
 			logger.LogInfo(context.Background(), "quota expiry task started")
+			runQuotaExpiryOnce()
 			scheduleNextQuotaExpiryRun()
+			ticker := time.NewTicker(time.Minute)
+			defer ticker.Stop()
+			for range ticker.C {
+				runQuotaExpiryOnce()
+			}
 		})
 	})
 }
@@ -46,7 +52,7 @@ func quotaExpiryScheduleLocation() *time.Location {
 func nextQuotaExpiryRunTime(now time.Time) time.Time {
 	location := quotaExpiryScheduleLocation()
 	current := now.In(location)
-	next := time.Date(current.Year(), current.Month(), current.Day(), 0, 10, 0, 0, location)
+	next := time.Date(current.Year(), current.Month(), current.Day(), 0, 0, 0, 0, location)
 	if !next.After(current) {
 		next = next.AddDate(0, 0, 1)
 	}
@@ -76,6 +82,11 @@ func runQuotaExpiryOnce() {
 	totalProcessed := 0
 	totalVoided := 0
 
+	if err := model.RecoverQuotaExpiryAccounting(); err != nil {
+		logger.LogError(ctx, fmt.Sprintf("quota expiry task: recovery failed: %v", err))
+		return
+	}
+
 	rebuilding, err := model.QuotaExpiryRebuildRunning()
 	if err != nil {
 		logger.LogError(ctx, fmt.Sprintf("quota expiry task: failed to query rebuild state: %v", err))
@@ -99,6 +110,7 @@ func runQuotaExpiryOnce() {
 			break
 		}
 
+		processedInBatch := 0
 		for _, expiry := range batch {
 			voidQuota, processed, err := model.ProcessQuotaExpiryWithReason(expiry.Id, "scheduled_task")
 			if err != nil {
@@ -109,13 +121,13 @@ func runQuotaExpiryOnce() {
 				continue
 			}
 			if voidQuota > 0 {
-				model.RecordQuotaExpiryVoidLog(expiry.UserId, voidQuota)
 				totalVoided += voidQuota
 			}
 			totalProcessed++
+			processedInBatch++
 		}
 
-		if len(batch) < quotaExpiryBatchSize {
+		if len(batch) < quotaExpiryBatchSize || processedInBatch == 0 {
 			break
 		}
 	}

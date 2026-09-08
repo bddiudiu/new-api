@@ -11,7 +11,6 @@ import (
 	"github.com/QuantumNous/new-api/logger"
 	"github.com/QuantumNous/new-api/types"
 
-	"github.com/bytedance/gopkg/util/gopool"
 	"github.com/gin-gonic/gin"
 
 	"gorm.io/gorm"
@@ -181,6 +180,11 @@ func RecordLogWithQuota(userId int, logType int, quota int, content string, othe
 
 func recordLogWithQuota(userId int, logType int, quota int, content string, trackExpiry bool, other ...string) {
 	if logType == LogTypeConsume && !common.LogConsumeEnabled {
+		otherStr := ""
+		if len(other) > 0 {
+			otherStr = other[0]
+		}
+		recordQuotaExpiryConsumption(&Log{UserId: userId, Type: logType, Quota: quota, CreatedAt: common.GetTimestamp(), Other: otherStr})
 		return
 	}
 	username, _ := GetUsernameById(userId, false)
@@ -199,19 +203,15 @@ func recordLogWithQuota(userId int, logType int, quota int, content string, trac
 		Group:     group,
 		Other:     otherStr,
 	}
-	err := createLog(log)
+	var err error
+	if trackExpiry {
+		err = createLogWithQuotaExpiry(log)
+	} else {
+		err = createLog(log)
+	}
 	if err != nil {
 		common.SysLog("failed to record log: " + err.Error())
 		return
-	}
-
-	if trackExpiry && quota > 0 {
-		logCopy := *log
-		gopool.Go(func() {
-			if err := HandleQuotaExpiryLog(&logCopy); err != nil {
-				common.SysLog("failed to handle quota expiry log: " + err.Error())
-			}
-		})
 	}
 }
 
@@ -388,6 +388,7 @@ type RecordConsumeLogParams struct {
 
 func RecordConsumeLog(c *gin.Context, userId int, params RecordConsumeLogParams) {
 	if !common.LogConsumeEnabled {
+		recordQuotaExpiryConsumption(&Log{UserId: userId, Type: LogTypeConsume, Quota: params.Quota, CreatedAt: common.GetTimestamp(), Other: params.Other.JSONString()})
 		return
 	}
 	logger.LogInfo(c, fmt.Sprintf("record consume log: userId=%d, params=%s", userId, common.GetJsonString(params)))
@@ -429,19 +430,10 @@ func RecordConsumeLog(c *gin.Context, userId int, params RecordConsumeLogParams)
 		UpstreamRequestId: upstreamRequestId,
 		Other:             otherStr,
 	}
-	err := createLog(log)
+	err := createLogWithQuotaExpiry(log)
 	if err != nil {
 		logger.LogError(c, "failed to record log: "+err.Error())
 		return
-	}
-
-	if params.Quota > 0 {
-		logCopy := *log
-		gopool.Go(func() {
-			if err := HandleQuotaExpiryLog(&logCopy); err != nil {
-				common.SysLog("failed to handle quota expiry log: " + err.Error())
-			}
-		})
 	}
 
 	if common.DataExportEnabled {
@@ -475,6 +467,7 @@ type RecordTaskBillingLogParams struct {
 
 func RecordTaskBillingLog(params RecordTaskBillingLogParams) {
 	if params.LogType == LogTypeConsume && !common.LogConsumeEnabled {
+		recordQuotaExpiryConsumption(&Log{UserId: params.UserId, Type: params.LogType, Quota: params.Quota, CreatedAt: common.GetTimestamp(), Other: params.Other.JSONString()})
 		return
 	}
 	username, _ := GetUsernameById(params.UserId, false)
@@ -499,20 +492,12 @@ func RecordTaskBillingLog(params RecordTaskBillingLogParams) {
 		Group:     params.Group,
 		Other:     params.Other.JSONString(),
 	}
-	err := createLog(log)
+	err := createLogWithQuotaExpiry(log)
 	if err != nil {
 		common.SysLog("failed to record task billing log: " + err.Error())
 		return
 	}
 
-	if params.Quota > 0 {
-		logCopy := *log
-		gopool.Go(func() {
-			if err := HandleQuotaExpiryLog(&logCopy); err != nil {
-				common.SysLog("failed to handle quota expiry log: " + err.Error())
-			}
-		})
-	}
 	if params.LogType == LogTypeConsume && common.DataExportEnabled {
 		nodeName := params.NodeName
 		if nodeName == "" {

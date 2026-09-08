@@ -17,10 +17,10 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import { fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import type { AxiosResponse } from 'axios'
 import { useState } from 'react'
-import { describe, expect, test, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest'
 
 import { api } from '@/lib/api'
 
@@ -114,5 +114,152 @@ describe('quota expiry settings', () => {
     )
     expect(await screen.findByRole('alertdialog')).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Start rebuild' })).toBeDisabled()
+  })
+})
+
+async function chooseQuotaRebuildDate() {
+  fireEvent.click(screen.getByRole('button', { name: 'Rebuild quota expiry' }))
+  fireEvent.click(
+    await screen.findByRole('button', { name: 'Select a start date' })
+  )
+  fireEvent.click(
+    await screen.findByRole('button', { name: /Tuesday, September 1st, 2026/ })
+  )
+  fireEvent.click(screen.getByRole('button', { name: '2026-09-01' }))
+  const start = screen.getByRole('button', { name: 'Start rebuild' })
+  await waitFor(() => expect(start).toBeEnabled())
+  fireEvent.click(start)
+}
+
+function quotaTaskResponse(
+  status: 'running' | 'completed' | 'failed',
+  error?: string
+) {
+  return {
+    data: {
+      success: true,
+      data: {
+        task_id: 'selftest-task',
+        status,
+        error,
+        stats: { scanned_log_count: 8, rebuilt_expiry_count: 3 },
+      },
+    },
+  } as AxiosResponse
+}
+
+describe('quota expiry self-test workflows', () => {
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ['Date', 'setInterval', 'clearInterval'] })
+    vi.setSystemTime(new Date('2026-09-07T12:00:00+08:00'))
+  })
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+
+  test('chosen date is submitted and completion stops polling', async () => {
+    const post = vi
+      .spyOn(api, 'post')
+      .mockResolvedValue(quotaTaskResponse('running'))
+    const get = vi
+      .spyOn(api, 'get')
+      .mockResolvedValue(quotaTaskResponse('completed'))
+    render(<QuotaExpiryTestPage value='[]' />)
+    await chooseQuotaRebuildDate()
+    await screen.findByText('Quota expiry rebuild completed')
+    expect(post).toHaveBeenCalledWith('/api/quota-expiry/rebuild', {
+      start_date: '2026-09-01',
+    })
+    expect(get).toHaveBeenCalledWith('/api/quota-expiry/rebuild/status', {
+      params: { task_id: 'selftest-task' },
+    })
+    expect(
+      screen.getByText('Scanned 8 logs; rebuilt 3 expiry records.')
+    ).toBeInTheDocument()
+    await act(() => vi.advanceTimersByTimeAsync(6000))
+    expect(get).toHaveBeenCalledTimes(1)
+    expect(
+      screen.getByRole('button', { name: 'Rebuild quota expiry' })
+    ).toBeEnabled()
+  })
+
+  test('running task polls until failed and permits another rebuild', async () => {
+    vi.spyOn(api, 'post').mockResolvedValue(quotaTaskResponse('running'))
+    const get = vi
+      .spyOn(api, 'get')
+      .mockResolvedValueOnce(quotaTaskResponse('running'))
+      .mockResolvedValue(quotaTaskResponse('failed', 'Rebuild query failed'))
+    render(<QuotaExpiryTestPage value='[]' />)
+    await chooseQuotaRebuildDate()
+    await waitFor(() => expect(get).toHaveBeenCalledTimes(1))
+    expect(
+      screen.getByRole('button', { name: 'Rebuild quota expiry' })
+    ).toBeDisabled()
+    await act(() => vi.advanceTimersByTimeAsync(2000))
+    await screen.findByText('Rebuild query failed')
+    expect(
+      screen.getByRole('button', { name: 'Rebuild quota expiry' })
+    ).toBeEnabled()
+    await act(() => vi.advanceTimersByTimeAsync(6000))
+    expect(get).toHaveBeenCalledTimes(2)
+  })
+
+  test('failed start displays its error and can retry the selected date', async () => {
+    const post = vi
+      .spyOn(api, 'post')
+      .mockResolvedValueOnce({
+        data: { success: false, message: 'Start rejected' },
+      } as AxiosResponse)
+      .mockResolvedValue(quotaTaskResponse('running'))
+    vi.spyOn(api, 'get').mockResolvedValue(quotaTaskResponse('completed'))
+    render(<QuotaExpiryTestPage value='[]' />)
+    await chooseQuotaRebuildDate()
+    await screen.findByText('Start rejected')
+    expect(screen.getByRole('alertdialog')).toBeInTheDocument()
+    const retry = screen.getByRole('button', { name: 'Start rebuild' })
+    expect(retry).toBeEnabled()
+    fireEvent.click(retry)
+    await screen.findByText('Quota expiry rebuild completed')
+    expect(post).toHaveBeenCalledTimes(2)
+  })
+
+  test('failed status query can retry and show the completed result', async () => {
+    vi.spyOn(api, 'post').mockResolvedValue(quotaTaskResponse('running'))
+    vi.spyOn(api, 'get')
+      .mockRejectedValueOnce(new Error('Status unavailable'))
+      .mockResolvedValue(quotaTaskResponse('completed'))
+    render(<QuotaExpiryTestPage value='[]' />)
+    await chooseQuotaRebuildDate()
+    await screen.findByText('Status unavailable')
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }))
+    await screen.findByText('Quota expiry rebuild completed')
+  })
+
+  test('rejects expiry above the backend maximum and saves the maximum', async () => {
+    vi.spyOn(api, 'put').mockResolvedValue({ data: { success: true } })
+    render(
+      <QuotaExpiryTestPage value='[{"label":"Activity","log_type":9,"expire_days":30}]' />
+    )
+    const save = screen.getByRole('button', { name: 'Save Changes' })
+    await waitFor(() => expect(save).toBeEnabled())
+    await act(async () => {
+      fireEvent.change(
+        screen.getByRole('spinbutton', { name: 'Expiry (days)' }),
+        { target: { value: '36501' } }
+      )
+    })
+    await waitFor(() => expect(save).toBeDisabled())
+    fireEvent.change(
+      screen.getByRole('spinbutton', { name: 'Expiry (days)' }),
+      { target: { value: '36500' } }
+    )
+    await waitFor(() => expect(save).toBeEnabled())
+    fireEvent.click(save)
+    await waitFor(() =>
+      expect(api.put).toHaveBeenCalledWith('/api/option/', {
+        key: 'quota_expiry_setting.rules',
+        value: '[{"label":"Activity","log_type":9,"expire_days":36500}]',
+      })
+    )
   })
 })

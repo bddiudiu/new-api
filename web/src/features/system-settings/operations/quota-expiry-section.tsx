@@ -41,7 +41,7 @@ import { useUpdateOption } from '../hooks/use-update-option'
 const ruleSchema = z.object({
   label: z.string().trim().min(1),
   log_type: z.number().int().positive(),
-  expire_days: z.number().int().positive(),
+  expire_days: z.number().int().positive().max(36500),
 })
 const rulesSchema = z
   .array(ruleSchema)
@@ -216,6 +216,7 @@ export function QuotaExpirySection(props: { defaultValue: string }) {
                 </FieldLabel>
                 <Input
                   id={`${rule.id}-days`}
+                  max={36500}
                   type='number'
                   min={1}
                   step={1}

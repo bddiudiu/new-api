@@ -1,6 +1,12 @@
 package operation_setting
 
-import "github.com/QuantumNous/new-api/setting/config"
+import (
+	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/setting/config"
+)
+
+// A century bounds calendar arithmetic while allowing long-lived grants.
+const MaxQuotaExpiryDays = 36500
 
 type LogTypeExpiryRule struct {
 	Label      string `json:"label"`
@@ -25,8 +31,10 @@ func GetQuotaExpirySetting() *QuotaExpirySetting {
 }
 
 func GetExpireDaysForLogType(logType int) int {
+	common.OptionMapRWMutex.RLock()
+	defer common.OptionMapRWMutex.RUnlock()
 	for _, rule := range quotaExpirySetting.Rules {
-		if rule.LogType == logType && rule.ExpireDays > 0 {
+		if rule.LogType == logType && rule.ExpireDays > 0 && rule.ExpireDays <= MaxQuotaExpiryDays {
 			return rule.ExpireDays
 		}
 	}
@@ -34,9 +42,11 @@ func GetExpireDaysForLogType(logType int) int {
 }
 
 func GetLogTypeExpireDaysMap() map[int]int {
+	common.OptionMapRWMutex.RLock()
+	defer common.OptionMapRWMutex.RUnlock()
 	result := make(map[int]int, len(quotaExpirySetting.Rules))
 	for _, rule := range quotaExpirySetting.Rules {
-		if rule.ExpireDays > 0 {
+		if rule.ExpireDays > 0 && rule.ExpireDays <= MaxQuotaExpiryDays && result[rule.LogType] == 0 {
 			result[rule.LogType] = rule.ExpireDays
 		}
 	}
