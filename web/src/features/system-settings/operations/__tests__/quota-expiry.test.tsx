@@ -16,28 +16,30 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
-import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
+import { QueryClientProvider } from '@tanstack/react-query'
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
-import type { AxiosResponse } from 'axios'
-import { useState } from 'react'
+import { AxiosError, type AxiosResponse } from 'axios'
+import { useEffect, useState } from 'react'
+import { toast } from 'sonner'
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest'
 
 import { api } from '@/lib/api'
+import { createAppQueryClient } from '@/lib/query-client'
 
 import { SettingsPageProvider } from '../../components/settings-page-context'
 import { QuotaExpirySection } from '../quota-expiry-section'
 
 function QuotaExpiryTestPage(props: { value: string }) {
   const [actions, setActions] = useState<HTMLDivElement | null>(null)
-  const [client] = useState(
-    () =>
-      new QueryClient({
-        defaultOptions: {
-          queries: { retry: false },
-          mutations: { retry: false },
-        },
-      })
-  )
+  const [client] = useState(() => {
+    const queryClient = createAppQueryClient()
+    queryClient.setDefaultOptions({
+      queries: { retry: false },
+      mutations: { retry: false },
+    })
+    return queryClient
+  })
+  useEffect(() => () => client.clear(), [client])
   return (
     <QueryClientProvider client={client}>
       <div ref={setActions} />
@@ -205,6 +207,7 @@ describe('quota expiry self-test workflows', () => {
   })
 
   test('failed start displays its error and can retry the selected date', async () => {
+    const notify = vi.spyOn(toast, 'error').mockReturnValue('error')
     const post = vi
       .spyOn(api, 'post')
       .mockResolvedValueOnce({
@@ -215,6 +218,7 @@ describe('quota expiry self-test workflows', () => {
     render(<QuotaExpiryTestPage value='[]' />)
     await chooseQuotaRebuildDate()
     await screen.findByText('Start rejected')
+    expect(notify).not.toHaveBeenCalled()
     expect(screen.getByRole('alertdialog')).toBeInTheDocument()
     const retry = screen.getByRole('button', { name: 'Start rebuild' })
     expect(retry).toBeEnabled()
@@ -224,15 +228,45 @@ describe('quota expiry self-test workflows', () => {
   })
 
   test('failed status query can retry and show the completed result', async () => {
+    const notify = vi.spyOn(toast, 'error').mockReturnValue('error')
     vi.spyOn(api, 'post').mockResolvedValue(quotaTaskResponse('running'))
     vi.spyOn(api, 'get')
-      .mockRejectedValueOnce(new Error('Status unavailable'))
+      .mockRejectedValueOnce(
+        new AxiosError(
+          'Request failed with status code 503',
+          undefined,
+          undefined,
+          undefined,
+          {
+            data: { success: false, message: 'Status unavailable' },
+            status: 503,
+          } as AxiosResponse
+        )
+      )
       .mockResolvedValue(quotaTaskResponse('completed'))
     render(<QuotaExpiryTestPage value='[]' />)
     await chooseQuotaRebuildDate()
     await screen.findByText('Status unavailable')
+    expect(notify).not.toHaveBeenCalled()
     fireEvent.click(screen.getByRole('button', { name: 'Retry' }))
     await screen.findByText('Quota expiry rebuild completed')
+  })
+
+  test('a rejected start preserves the nested server reason inside the dialog', async () => {
+    const notify = vi.spyOn(toast, 'error').mockReturnValue('error')
+    vi.spyOn(api, 'post').mockResolvedValue({
+      data: {
+        success: false,
+        error: { message: 'A rebuild is already running' },
+      },
+    } as AxiosResponse)
+    render(<QuotaExpiryTestPage value='[]' />)
+    await chooseQuotaRebuildDate()
+    expect(await screen.findByRole('alert')).toHaveTextContent(
+      'A rebuild is already running'
+    )
+    expect(screen.getByRole('button', { name: 'Start rebuild' })).toBeEnabled()
+    expect(notify).not.toHaveBeenCalled()
   })
 
   test('rejects expiry above the backend maximum and saves the maximum', async () => {

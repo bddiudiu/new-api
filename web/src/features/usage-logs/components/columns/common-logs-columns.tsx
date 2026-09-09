@@ -50,7 +50,7 @@ import { formatBillingCurrencyFromUSD } from '@/lib/currency'
 import { formatLogQuota, formatTimestampToDate } from '@/lib/format'
 import { cn } from '@/lib/utils'
 
-import { LOG_TYPE_ALL_VALUE } from '../../constants'
+import { LOG_TYPE_ALL_VALUE, LOG_TYPE_ENUM } from '../../constants'
 import type { UsageLog } from '../../data/schema'
 import {
   formatModelName,
@@ -131,7 +131,11 @@ function buildTypeDetailSegments(
   usageSchema?: BillingUsageSchema
 ): DetailSegment[] {
   // Top-up, audit, and login logs can carry a localized operation descriptor.
-  if (log.type === 1 || log.type === 3 || log.type === 7) {
+  if (
+    log.type === LOG_TYPE_ENUM.TOPUP ||
+    log.type === LOG_TYPE_ENUM.MANAGE ||
+    log.type === LOG_TYPE_ENUM.LOGIN
+  ) {
     const text = renderAuditContent(other, t)
     return text ? [{ text }] : []
   }

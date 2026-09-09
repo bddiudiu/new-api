@@ -64,6 +64,7 @@ import { formatLogQuota, formatTokens, formatUseTime } from '@/lib/format'
 import { cn } from '@/lib/utils'
 
 import { AuditDetailFields } from '../../audit/components/audit-detail-fields'
+import { LOG_TYPE_ENUM } from '../../constants'
 import type { UsageLog } from '../../data/schema'
 import {
   parseLogOther,
@@ -555,8 +556,8 @@ export function DetailsDialog(props: DetailsDialogProps) {
   const showManageAuditSection =
     isManage && props.isAdmin && (operationText != null || auditRoute != null)
 
-  // Login audit (type=7); visible to the log owner, not admin-only.
-  const isLogin = props.log.type === 7
+  // Login audit is visible to the log owner, not admin-only.
+  const isLogin = props.log.type === LOG_TYPE_ENUM.LOGIN
   const loginAuditFields = isLogin
     ? ([
         other?.login_method && {
@@ -1005,7 +1006,7 @@ export function DetailsDialog(props: DetailsDialogProps) {
           </DetailSection>
         )}
 
-        {/* Login audit info (type=7) */}
+        {/* Login audit info */}
         {isLogin && loginAuditFields.length > 0 && (
           <DetailSection
             icon={<LogIn className='size-3.5' aria-hidden='true' />}

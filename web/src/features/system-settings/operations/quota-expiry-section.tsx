@@ -31,6 +31,10 @@ import { Field, FieldGroup, FieldLabel } from '@/components/ui/field'
 import { Input } from '@/components/ui/input'
 import { api } from '@/lib/api'
 import dayjs from '@/lib/dayjs'
+import {
+  createServerError,
+  getServerErrorMessage,
+} from '@/lib/server-error-message'
 
 import { SettingsForm } from '../components/settings-form-layout'
 import { SettingsPageFormActions } from '../components/settings-page-context'
@@ -86,6 +90,7 @@ export function QuotaExpirySection(props: { defaultValue: string }) {
   const [taskId, setTaskId] = useState<string>()
 
   const rebuild = useMutation({
+    meta: { errorToast: false },
     mutationFn: async () => {
       if (!startDate) throw new Error(t('Select a start date'))
       const response = await api.post<RebuildResponse>(
@@ -95,8 +100,9 @@ export function QuotaExpirySection(props: { defaultValue: string }) {
         }
       )
       if (!response.data.success || !response.data.data) {
-        throw new Error(
-          response.data.message || t('Failed to start quota expiry rebuild')
+        throw createServerError(
+          response.data,
+          t('Failed to start quota expiry rebuild')
         )
       }
       return response.data.data
@@ -107,6 +113,7 @@ export function QuotaExpirySection(props: { defaultValue: string }) {
     },
   })
   const status = useQuery({
+    meta: { errorToast: false },
     queryKey: ['quota-expiry-rebuild', taskId],
     enabled: Boolean(taskId),
     queryFn: async () => {
@@ -117,8 +124,9 @@ export function QuotaExpirySection(props: { defaultValue: string }) {
         }
       )
       if (!response.data.success || !response.data.data) {
-        throw new Error(
-          response.data.message || t('Failed to query rebuild status')
+        throw createServerError(
+          response.data,
+          t('Failed to query rebuild status')
         )
       }
       return response.data.data
@@ -294,12 +302,20 @@ export function QuotaExpirySection(props: { defaultValue: string }) {
       )}
       {status.data?.status === 'failed' && (
         <p role='alert'>
-          {status.data.error || t('Quota expiry rebuild failed')}
+          {getServerErrorMessage(
+            status.data.error,
+            t('Quota expiry rebuild failed')
+          )}
         </p>
       )}
       {status.isError && (
         <div role='alert'>
-          <p>{status.error.message}</p>
+          <p>
+            {getServerErrorMessage(
+              status.error,
+              t('Failed to query rebuild status')
+            )}
+          </p>
           <Button variant='outline' onClick={() => void status.refetch()}>
             {t('Retry')}
           </Button>
@@ -323,7 +339,14 @@ export function QuotaExpirySection(props: { defaultValue: string }) {
           onSelect={setStartDate}
           placeholder={t('Select a start date')}
         />
-        {rebuild.isError && <p role='alert'>{rebuild.error.message}</p>}
+        {rebuild.isError && (
+          <p role='alert'>
+            {getServerErrorMessage(
+              rebuild.error,
+              t('Failed to start quota expiry rebuild')
+            )}
+          </p>
+        )}
       </ConfirmDialog>
     </SettingsSection>
   )

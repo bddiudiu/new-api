@@ -73,9 +73,15 @@ function makeLog(other: LogOtherData): UsageLog {
   }
 }
 
-function DetailPreview(props: { other: LogOtherData; isAdmin: boolean }) {
+function DetailPreview(props: {
+  other: LogOtherData
+  isAdmin: boolean
+  logType?: number
+}) {
+  const log = makeLog(props.other)
+  if (props.logType !== undefined) log.type = props.logType
   const table = useReactTable({
-    data: [makeLog(props.other)],
+    data: [log],
     columns: useCommonLogsColumns(props.isAdmin, false),
     getCoreRowModel: getCoreRowModel(),
   })
@@ -116,16 +122,50 @@ afterEach(() => {
   client.clear()
   useSystemConfigStore.getState().setConfig(previousConfig)
 })
-function renderPreview(other: LogOtherData, isAdmin = true) {
+function renderPreview(other: LogOtherData, isAdmin = true, logType?: number) {
   render(
     <I18nextProvider i18n={i18n}>
       <QueryClientProvider client={client}>
-        <DetailPreview other={other} isAdmin={isAdmin} />
+        <DetailPreview other={other} isAdmin={isAdmin} logType={logType} />
       </QueryClientProvider>
     </I18nextProvider>
   )
   return screen.getByRole('button', { name: /./ })
 }
+
+test.each([
+  {
+    type: 13,
+    label: 'login',
+    summary: 'Logged in successfully via password',
+    login: true,
+  },
+  { type: 7, label: 'AI voice', summary: '—', login: false },
+])(
+  '$label logs keep the correct preview and login details',
+  async ({ type, summary, login }) => {
+    const preview = renderPreview(
+      {
+        op: { action: 'login', params: { method: 'password' } },
+        login_method: 'password',
+        user_agent: 'audit-test-browser',
+      },
+      false,
+      type
+    )
+    expect(preview.textContent).toBe(summary)
+    fireEvent.click(preview)
+    const dialog = within(await screen.findByRole('dialog'))
+    if (login) {
+      expect(dialog.getByText('Login Info')).toBeVisible()
+      expect(dialog.getByText('password')).toBeVisible()
+      expect(dialog.getByText('audit-test-browser')).toBeVisible()
+    } else {
+      expect(dialog.queryByText('Login Info')).not.toBeInTheDocument()
+      expect(dialog.queryByText('audit-test-browser')).not.toBeInTheDocument()
+    }
+  }
+)
 
 test.each([
   {
