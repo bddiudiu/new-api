@@ -2,6 +2,7 @@ package openai
 
 import (
 	"fmt"
+	"sort"
 	"strings"
 
 	"github.com/QuantumNous/new-api/common"
@@ -137,13 +138,19 @@ func ProcessStreamResponse(streamResponse dto.ChatCompletionsStreamResponse, res
 	return nil
 }
 
-func processTokenData(relayMode int, data string, responseTextBuilder *strings.Builder, toolCount *int) error {
+type streamToolCallKey struct {
+	choiceIndex int
+	toolIndex   int
+}
+
+func processTokenData(relayMode int, data string, responseTextBuilder *strings.Builder, toolCount *int, accumulatedToolCalls map[streamToolCallKey]*dto.ToolCallResponse) error {
 	switch relayMode {
 	case relayconstant.RelayModeChatCompletions:
 		var streamResponse dto.ChatCompletionsStreamResponse
 		if err := common.UnmarshalJsonStr(data, &streamResponse); err != nil {
 			return err
 		}
+		accumulateToolCalls(streamResponse, accumulatedToolCalls)
 		return ProcessStreamResponse(streamResponse, responseTextBuilder, toolCount)
 	case relayconstant.RelayModeCompletions:
 		var streamResponse dto.CompletionsStreamResponse
@@ -153,6 +160,45 @@ func processTokenData(relayMode int, data string, responseTextBuilder *strings.B
 		processCompletionsStreamResponse(streamResponse, responseTextBuilder)
 	}
 	return nil
+}
+
+// accumulateToolCalls 从流式响应中累积完整的 tool_calls
+func accumulateToolCalls(streamResponse dto.ChatCompletionsStreamResponse, accumulatedToolCalls map[streamToolCallKey]*dto.ToolCallResponse) {
+	if accumulatedToolCalls == nil {
+		return
+	}
+	for _, choice := range streamResponse.Choices {
+		if choice.Delta.ToolCalls == nil {
+			continue
+		}
+		for i, tool := range choice.Delta.ToolCalls {
+			idx := streamToolCallKey{choiceIndex: choice.Index, toolIndex: i}
+			if tool.Index != nil {
+				idx.toolIndex = *tool.Index
+			}
+			if _, exists := accumulatedToolCalls[idx]; !exists {
+				accumulatedToolCalls[idx] = &dto.ToolCallResponse{
+					ID:   tool.ID,
+					Type: tool.Type,
+					Function: dto.FunctionResponse{
+						Name:      tool.Function.Name,
+						Arguments: tool.Function.Arguments,
+					},
+				}
+			} else {
+				if tool.ID != "" {
+					accumulatedToolCalls[idx].ID = tool.ID
+				}
+				if tool.Type != nil && tool.Type != "" {
+					accumulatedToolCalls[idx].Type = tool.Type
+				}
+				if tool.Function.Name != "" {
+					accumulatedToolCalls[idx].Function.Name += tool.Function.Name
+				}
+				accumulatedToolCalls[idx].Function.Arguments += tool.Function.Arguments
+			}
+		}
+	}
 }
 
 func processCompletionsStreamResponse(streamResponse dto.CompletionsStreamResponse, responseTextBuilder *strings.Builder) {
@@ -191,10 +237,42 @@ func handleLastResponse(lastStreamData string, responseId *string, createAt *int
 
 func HandleFinalResponse(c *gin.Context, info *relaycommon.RelayInfo, lastStreamData string,
 	responseId string, createAt int64, model string, systemFingerprint string,
-	usage *dto.Usage, containStreamUsage bool) {
+	usage *dto.Usage, containStreamUsage bool, accumulatedToolCalls map[streamToolCallKey]*dto.ToolCallResponse) {
 
 	switch info.RelayFormat {
 	case types.RelayFormatOpenAI:
+		// 在流结束前发送包含 metainfo 的响应块
+		if len(accumulatedToolCalls) > 0 {
+			var toolCallsList []dto.MetaInfoToolCall
+			keys := make([]streamToolCallKey, 0, len(accumulatedToolCalls))
+			for k := range accumulatedToolCalls {
+				keys = append(keys, k)
+			}
+			sort.Slice(keys, func(i, j int) bool {
+				if keys[i].choiceIndex != keys[j].choiceIndex {
+					return keys[i].choiceIndex < keys[j].choiceIndex
+				}
+				return keys[i].toolIndex < keys[j].toolIndex
+			})
+			for _, k := range keys {
+				tc := *accumulatedToolCalls[k]
+				idx := k.toolIndex
+				choiceIndex := k.choiceIndex
+				tc.Index = &idx
+				toolCallsList = append(toolCallsList, dto.MetaInfoToolCall{ToolCallResponse: tc, ChoiceIndex: &choiceIndex})
+			}
+
+			metaInfoResponse := &dto.ChatCompletionsStreamResponse{
+				Id:      responseId,
+				Type:    "meta.info",
+				Created: createAt,
+				MetaInfo: &dto.MetaInfo{
+					ToolCalls: toolCallsList,
+				},
+			}
+			helper.ObjectData(c, metaInfoResponse)
+		}
+
 		if info.ShouldIncludeUsage && !containStreamUsage {
 			response := helper.GenerateFinalUsageResponse(responseId, createAt, model, *usage)
 			response.SetSystemFingerprint(systemFingerprint)

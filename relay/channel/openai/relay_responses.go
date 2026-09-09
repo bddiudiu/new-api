@@ -49,6 +49,8 @@ func OaiResponsesHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http
 			info.CountBillableToolCall(dto.BuildInCallFileSearchCall, "")
 		case dto.BuildInCallFunctionCall:
 			info.CountBillableToolCall(dto.BuildInCallFunctionCall, output.Name)
+		default:
+			info.ResponsesUsageInfo.RecordToolCall(output.Type)
 		}
 	}
 
@@ -60,6 +62,9 @@ func OaiResponsesHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http
 		}
 	}
 	imageCounter.Commit(info)
+	if responsesResponse.Usage != nil {
+		info.ResponsesUsageInfo.RecordCurrentToolUsage(responsesResponse.Usage.ToolUsage)
+	}
 
 	return usage, nil
 }
@@ -76,6 +81,7 @@ func OaiResponsesStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp
 	var responseTextBuilder strings.Builder
 	imageCounter := &relaycommon.ImageGenerationCallCounter{}
 	imageCommitted := false
+	var currentToolUsage map[string]int
 
 	helper.StreamScannerHandler(c, resp, info, func(data string, sr *helper.StreamResult) {
 
@@ -91,6 +97,7 @@ func OaiResponsesStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp
 		case "response.completed", "response.done":
 			if streamResponse.Response != nil {
 				if streamResponse.Response.Usage != nil {
+					currentToolUsage = streamResponse.Response.Usage.ToolUsage
 					incomingUsage := relayconvert.NormalizeResponsesUsage(streamResponse.Response.Usage)
 					usage = dto.MergeUsageNonZero(usage, incomingUsage)
 				}
@@ -134,6 +141,8 @@ func OaiResponsesStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp
 					if !imageCommitted {
 						imageCounter.Observe(streamResponse.Item, streamResponse.OutputIndex)
 					}
+				default:
+					info.ResponsesUsageInfo.RecordToolCall(streamResponse.Item.Type)
 				}
 			}
 		}
@@ -153,6 +162,7 @@ func OaiResponsesStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp
 		usage.PromptTokens = info.GetEstimatePromptTokens()
 	}
 
+	info.ResponsesUsageInfo.RecordCurrentToolUsage(currentToolUsage)
 	usage.TotalTokens = usage.PromptTokens + usage.CompletionTokens
 	if usage.BillingUsage != nil {
 		usage.BillingUsage = dto.CloneBillingUsageWithEstimatedCompletion(usage.BillingUsage, usage.CompletionTokens)

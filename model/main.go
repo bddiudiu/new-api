@@ -364,6 +364,9 @@ func migrateDB() error {
 		&SubscriptionPreConsumeRecord{},
 		&CustomOAuthProvider{},
 		&UserOAuthBinding{},
+		&LogQuotaExpiry{},
+		&QuotaExpiryRuntimeState{},
+		&QuotaExpiryReplayLog{},
 		&PerfMetric{},
 		&SystemInstance{},
 		&SystemTask{},
@@ -399,7 +402,7 @@ func migrateLOGDB() error {
 	if common.UsingLogDatabase(common.DatabaseTypeClickHouse) {
 		return migrateClickHouseLogDB()
 	}
-	return LOG_DB.AutoMigrate(&Log{})
+	return LOG_DB.AutoMigrate(&Log{}, &QuotaExpiryLogOutbox{})
 }
 
 func migrateClickHouseLogDB() error {

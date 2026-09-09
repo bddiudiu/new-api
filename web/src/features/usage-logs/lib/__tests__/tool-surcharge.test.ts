@@ -19,7 +19,7 @@ For commercial licensing, please contact support@quantumnous.com
 import { describe, expect, test } from 'vitest'
 
 import type { LogOtherData } from '../../types'
-import { hasToolSurcharge } from '../format'
+import { getToolSurcharges, hasToolSurcharge } from '../format'
 
 describe('tool surcharge detection', () => {
   test('shows the marker for a charged structured tool surcharge', () => {
@@ -94,4 +94,20 @@ describe('tool surcharge detection', () => {
       expect(hasToolSurcharge(other)).toBe(false)
     }
   })
+})
+
+test('preserves coocare tool call history and prefers current surcharge records', () => {
+  const legacy = {
+    tool_calls: [{ name: 'web_extractor', call_count: 2, price_per_1k: 3 }],
+  }
+  expect(hasToolSurcharge(legacy)).toBe(true)
+  expect(getToolSurcharges(legacy)).toEqual([
+    { name: 'web_extractor', count: 2, price: 3 },
+  ])
+  expect(
+    getToolSurcharges({
+      ...legacy,
+      tool_surcharges: [{ name: 'web_extractor', count: 1, price: 3 }],
+    })
+  ).toEqual([{ name: 'web_extractor', count: 1, price: 3 }])
 })

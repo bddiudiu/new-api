@@ -340,6 +340,7 @@ export type BillingSettings = {
 }
 
 export type OperationsSettings = {
+  'quota_expiry_setting.rules': string
   DefaultCollapseSidebar: boolean
   DemoSiteEnabled: boolean
   SelfUseModeEnabled: boolean

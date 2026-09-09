@@ -25,8 +25,18 @@ import { PerformanceSection } from '../maintenance/performance-section'
 import { UpdateCheckerSection } from '../maintenance/update-checker-section'
 import type { OperationsSettings } from '../types'
 import { createSectionRegistry } from '../utils/section-registry'
+import { QuotaExpirySection } from './quota-expiry-section'
 
 const OPERATIONS_SECTIONS = [
+  {
+    id: 'quota-expiry',
+    titleKey: 'Quota Expiry',
+    build: (settings: OperationsSettings) => (
+      <QuotaExpirySection
+        defaultValue={settings['quota_expiry_setting.rules']}
+      />
+    ),
+  },
   {
     id: 'behavior',
     titleKey: 'System Behavior',

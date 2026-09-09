@@ -106,6 +106,12 @@ it('marks only retired log types as deprecated while keeping historical filters 
     'System',
     'Error',
     'Refund',
+    'AI Voice',
+    'AI Meeting',
+    'Activity',
+    'Model Unlock',
+    'Check-in',
+    'Quota Expiry',
   ]) {
     expect(
       within(screen.getByRole('option', { name: label })).queryByText(
@@ -125,6 +131,9 @@ it('marks only retired log types as deprecated while keeping historical filters 
   await userEvent.click(screen.getByRole('option', { name: /^Login/ }))
   await userEvent.click(screen.getByRole('button', { name: 'Search' }))
   await waitFor(() =>
-    expect(router.state.location.search).toMatchObject({ type: ['7'], page: 1 })
+    expect(router.state.location.search).toMatchObject({
+      type: ['13'],
+      page: 1,
+    })
   )
 })

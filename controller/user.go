@@ -991,16 +991,41 @@ func CreateUser(c *gin.Context) {
 		Username:    user.Username,
 		Password:    user.Password,
 		DisplayName: user.DisplayName,
+		Group:       user.Group,
 		Role:        user.Role, // 保持管理员设置的角色
 	}
 	authzTouched := false
+	var defaultToken *model.Token
 	if err := model.DB.Transaction(func(tx *gorm.DB) error {
 		if err := cleanUser.InsertWithTx(tx, 0); err != nil {
 			return err
 		}
 		touched, err := updateAdminPermissionsForUserInTx(c, tx, cleanUser.Id, cleanUser.Role, user.AdminPermissions)
 		authzTouched = touched
-		return err
+		if err != nil {
+			return err
+		}
+		if constant.GenerateDefaultToken {
+			key, err := common.GenerateKey()
+			if err != nil {
+				return err
+			}
+			defaultToken = &model.Token{
+				UserId:         cleanUser.Id,
+				Name:           cleanUser.Username + "的初始令牌",
+				Key:            key,
+				CreatedTime:    common.GetTimestamp(),
+				AccessedTime:   common.GetTimestamp(),
+				ExpiredTime:    -1,
+				RemainQuota:    500000,
+				UnlimitedQuota: true,
+			}
+			if setting.DefaultUseAutoGroup {
+				defaultToken.Group = "auto"
+			}
+			return tx.Create(defaultToken).Error
+		}
+		return nil
 	}); err != nil {
 		common.ApiError(c, err)
 		return
@@ -1014,12 +1039,14 @@ func CreateUser(c *gin.Context) {
 	cleanUser.FinishInsert(0)
 
 	recordManageAuditFor(c, cleanUser.Id, "user.create", map[string]any{
-		"username": cleanUser.Username,
-		"role":     cleanUser.Role,
+		"username":              cleanUser.Username,
+		"role":                  cleanUser.Role,
+		"default_token_created": defaultToken != nil,
 	})
 	c.JSON(http.StatusOK, gin.H{
 		"success": true,
 		"message": "",
+		"userId":  cleanUser.Id,
 	})
 	return
 }

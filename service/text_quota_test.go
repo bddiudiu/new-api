@@ -64,7 +64,10 @@ func TestFixedPriceBillingDatabaseMatrix(t *testing.T) {
 			model.DB, model.LOG_DB = db, db
 			common.SetDatabaseTypes(dialect.name, dialect.name)
 			t.Cleanup(func() { model.DB, model.LOG_DB = oldDB, oldLogDB; common.SetDatabaseTypes(oldMainType, oldLogType) })
-			require.NoError(t, db.AutoMigrate(&model.User{}, &model.Token{}, &model.Channel{}, &model.Log{}))
+			require.NoError(t, db.AutoMigrate(
+				&model.User{}, &model.Token{}, &model.Channel{}, &model.Log{},
+				&model.LogQuotaExpiry{}, &model.QuotaExpiryRuntimeState{}, &model.QuotaExpiryReplayLog{},
+			))
 			versionQuery := "select version()"
 			if dialect.name == common.DatabaseTypeSQLite {
 				versionQuery = "select sqlite_version()"

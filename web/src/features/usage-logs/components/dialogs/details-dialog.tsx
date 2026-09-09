@@ -67,6 +67,7 @@ import { AuditDetailFields } from '../../audit/components/audit-detail-fields'
 import type { UsageLog } from '../../data/schema'
 import {
   parseLogOther,
+  getToolSurcharges,
   getParamOverrideActionLabel,
   parseAuditLine,
   decodeBillingExprB64,
@@ -295,25 +296,35 @@ function BillingBreakdown(props: {
     }
   }
 
-  if (other.web_search && other.web_search_call_count) {
-    rows.push({
-      label: t('Web Search'),
-      value: `${other.web_search_call_count}x${other.web_search_price ? ` (${fmtPrice(other.web_search_price)})` : ''}`,
-    })
-  }
+  const toolSurcharges = getToolSurcharges(other)
+  if (toolSurcharges.length > 0) {
+    for (const item of toolSurcharges) {
+      rows.push({
+        label: item.name,
+        value: `${item.count} × (${fmtPrice(item.price)}/1K)`,
+      })
+    }
+  } else {
+    if (other.web_search && other.web_search_call_count) {
+      rows.push({
+        label: t('Web Search'),
+        value: `${other.web_search_call_count}x${other.web_search_price ? ` (${fmtPrice(other.web_search_price)})` : ''}`,
+      })
+    }
 
-  if (other.file_search && other.file_search_call_count) {
-    rows.push({
-      label: t('File Search'),
-      value: `${other.file_search_call_count}x${other.file_search_price ? ` (${fmtPrice(other.file_search_price)})` : ''}`,
-    })
-  }
+    if (other.file_search && other.file_search_call_count) {
+      rows.push({
+        label: t('File Search'),
+        value: `${other.file_search_call_count}x${other.file_search_price ? ` (${fmtPrice(other.file_search_price)})` : ''}`,
+      })
+    }
 
-  if (other.image_generation_call && other.image_generation_call_price) {
-    rows.push({
-      label: t('Image Generation'),
-      value: fmtPrice(other.image_generation_call_price),
-    })
+    if (other.image_generation_call && other.image_generation_call_price) {
+      rows.push({
+        label: t('Image Generation'),
+        value: fmtPrice(other.image_generation_call_price),
+      })
+    }
   }
 
   if (other.audio_input_seperate_price && other.audio_input_price) {

@@ -26,7 +26,7 @@ import {
 } from '@/features/pricing/lib/billing-expr'
 
 import type { UsageLog } from '../data/schema'
-import type { LogOtherData } from '../types'
+import type { LogOtherData, ToolSurchargeItem } from '../types'
 import { buildQuotaAuditOperation } from './quota-audit-operation'
 
 export { normalizeTierLabel }
@@ -110,6 +110,30 @@ function hasLegacySearchSurcharge(
   )
 }
 
+// Coocare releases used tool_calls before the shared surcharge schema.
+export function getToolSurcharges(
+  other: LogOtherData | null
+): ToolSurchargeItem[] {
+  if (!other) return []
+  let items = other.tool_surcharges
+  if (!Array.isArray(items)) {
+    items = Array.isArray(other.tool_calls)
+      ? other.tool_calls.map((item) => ({
+          name: item?.name,
+          count: item?.call_count,
+          price: item?.price_per_1k,
+        }))
+      : []
+  }
+  return items.filter(
+    (item) =>
+      typeof item?.name === 'string' &&
+      item.name.trim() !== '' &&
+      isPositiveFiniteNumber(item.count) &&
+      isPositiveFiniteNumber(item.price)
+  )
+}
+
 /**
  * Check whether a consume log includes an actual tool-call surcharge.
  * Structured surcharge items cover current logs, while the legacy fields keep
@@ -118,16 +142,7 @@ function hasLegacySearchSurcharge(
 export function hasToolSurcharge(other: LogOtherData | null): boolean {
   if (!other) return false
 
-  const hasStructuredSurcharge =
-    Array.isArray(other.tool_surcharges) &&
-    other.tool_surcharges.some(
-      (item) =>
-        typeof item?.name === 'string' &&
-        item.name.trim() !== '' &&
-        isPositiveFiniteNumber(item.count) &&
-        isPositiveFiniteNumber(item.price)
-    )
-  if (hasStructuredSurcharge) return true
+  if (getToolSurcharges(other).length > 0) return true
 
   if (
     hasLegacySearchSurcharge(
