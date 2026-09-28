@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 
@@ -82,15 +83,27 @@ type Log struct {
 
 // don't use iota, avoid change log type value
 const (
-	LogTypeUnknown = 0
-	LogTypeTopup   = 1
-	LogTypeConsume = 2
-	LogTypeManage  = 3
-	LogTypeSystem  = 4
-	LogTypeError   = 5
-	LogTypeRefund  = 6
-	LogTypeLogin   = 7
+	LogTypeUnknown     = 0
+	LogTypeTopup       = 1
+	LogTypeConsume     = 2
+	LogTypeManage      = 3
+	LogTypeSystem      = 4
+	LogTypeError       = 5
+	LogTypeRefund      = 6
+	LogTypeLogin       = 7
+	LogTypeMeeting     = 8
+	LogTypeActive      = 9
+	LogTypeUnlock      = 10
+	LogTypeCheckin     = 11
+	LogTypeQuotaExpiry = 12
+	LogTypeVoice       = 13
 )
+
+var quotaConsumeLogTypes = []int{LogTypeConsume, LogTypeMeeting, LogTypeUnlock, LogTypeVoice}
+
+func IsQuotaConsumeLogType(logType int) bool {
+	return slices.Contains(quotaConsumeLogTypes, logType)
+}
 
 func ensureLogRequestId(log *Log) {
 	if log != nil && log.RequestId == "" {
@@ -163,6 +176,31 @@ func RecordLog(userId int, logType int, content string) {
 	if err != nil {
 		common.SysLog("failed to record log: " + err.Error())
 	}
+}
+
+// RecordLogWithQuota records business usage without changing the user's wallet.
+func RecordLogWithQuota(userId, logType, quota int, content, other string, request ...*gin.Context) error {
+	if logType == LogTypeConsume && !common.LogConsumeEnabled {
+		return nil
+	}
+	user, err := GetUserById(userId, false)
+	if err != nil {
+		return err
+	}
+	log := &Log{
+		UserId:    user.Id,
+		Username:  user.Username,
+		Group:     user.Group,
+		CreatedAt: common.GetTimestamp(),
+		Type:      logType,
+		Quota:     quota,
+		Content:   content,
+		Other:     formatLogOtherJSON(other, logOtherVisibilityRoot),
+	}
+	if len(request) > 0 && request[0] != nil {
+		log.RequestId = request[0].GetString(common.RequestIdKey)
+	}
+	return createLog(log)
 }
 
 // RecordLogWithAdminInfo stores operator metadata under other.admin_info and
@@ -648,8 +686,8 @@ func SumUsedQuota(logType int, startTimestamp int64, endTimestamp int64, modelNa
 		rpmTpmQuery = rpmTpmQuery.Where(logGroupCol+" = ?", group)
 	}
 
-	tx = tx.Where("type = ?", LogTypeConsume)
-	rpmTpmQuery = rpmTpmQuery.Where("type = ?", LogTypeConsume)
+	tx = tx.Where("type IN ?", quotaConsumeLogTypes)
+	rpmTpmQuery = rpmTpmQuery.Where("type IN ?", quotaConsumeLogTypes)
 
 	// 只统计最近60秒的rpm和tpm
 	rpmTpmQuery = rpmTpmQuery.Where("created_at >= ?", time.Now().Add(-60*time.Second).Unix())
@@ -690,7 +728,7 @@ func SumUsedToken(logType int, startTimestamp int64, endTimestamp int64, modelNa
 	if modelName != "" {
 		tx = tx.Where("model_name = ?", modelName)
 	}
-	tx.Where("type = ?", LogTypeConsume).Scan(&token)
+	tx.Where("type IN ?", quotaConsumeLogTypes).Scan(&token)
 	return token
 }
 

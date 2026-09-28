@@ -61,7 +61,9 @@ func DoCheckin(c *gin.Context) {
 		})
 		return
 	}
-	model.RecordLog(userId, model.LogTypeSystem, fmt.Sprintf("用户签到，获得额度 %s", logger.LogQuota(checkin.QuotaAwarded)))
+	if err := model.RecordLogWithQuota(userId, model.LogTypeCheckin, checkin.QuotaAwarded, fmt.Sprintf("用户签到，获得额度 %s", logger.LogQuota(checkin.QuotaAwarded)), "", c); err != nil {
+		common.SysError("failed to record check-in quota log: " + err.Error())
+	}
 	c.JSON(http.StatusOK, gin.H{
 		"success": true,
 		"message": "签到成功",

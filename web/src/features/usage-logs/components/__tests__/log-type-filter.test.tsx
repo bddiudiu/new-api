@@ -89,6 +89,31 @@ afterEach(() => {
   vi.restoreAllMocks()
 })
 
+it.each([
+  ['AI Meeting', '8'],
+  ['Activity', '9'],
+  ['Model Unlock', '10'],
+  ['Check-in', '11'],
+  ['Quota Expiry', '12'],
+  ['AI Voice', '13'],
+])('filters %s logs using the stable type value %s', async (label, value) => {
+  const router = await renderFilter()
+  await userEvent.click(screen.getByRole('combobox', { name: 'Type' }))
+  const option = screen.getByRole('option', { name: label })
+  expect(within(option).queryByText('Deprecated')).not.toBeInTheDocument()
+  await userEvent.click(option)
+  expect(screen.getByRole('combobox', { name: 'Type' })).toHaveTextContent(
+    label
+  )
+  await userEvent.click(screen.getByRole('button', { name: 'Search' }))
+  await waitFor(() =>
+    expect(router.state.location.search).toMatchObject({
+      type: [value],
+      page: 1,
+    })
+  )
+})
+
 it('marks only retired log types as deprecated while keeping historical filters selectable', async () => {
   const router = await renderFilter()
   await userEvent.click(screen.getByRole('combobox', { name: 'Type' }))

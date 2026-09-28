@@ -1,14 +1,61 @@
 package controller
 
 import (
+	"encoding/json"
 	"net/http"
 	"strconv"
+	"strings"
 
 	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/i18n"
 	"github.com/QuantumNous/new-api/model"
 
 	"github.com/gin-gonic/gin"
 )
+
+type RecordLogWithQuotaRequest struct {
+	UserId  int    `json:"user_id"`
+	LogType int    `json:"log_type"`
+	Quota   int    `json:"quota"`
+	Content string `json:"content"`
+	Other   string `json:"other"`
+}
+
+func RecordLogWithQuota(c *gin.Context) {
+	var req RecordLogWithQuotaRequest
+	if err := common.DecodeJson(c.Request.Body, &req); err != nil {
+		common.ApiErrorI18n(c, i18n.MsgInvalidParams)
+		return
+	}
+	req.Content = strings.TrimSpace(req.Content)
+	req.Other = strings.TrimSpace(req.Other)
+	if req.UserId <= 0 || req.LogType < model.LogTypeTopup || req.LogType > model.LogTypeVoice || req.Content == "" {
+		common.ApiErrorI18n(c, i18n.MsgInvalidParams)
+		return
+	}
+	// Non-consumption entries may describe signed wallet adjustments. A usage
+	// entry must never lower the reported consumption through a negative charge.
+	if req.Quota < -common.MaxWalletQuota || common.ValidateWalletQuota(req.Quota) != nil || (model.IsQuotaConsumeLogType(req.LogType) && req.Quota < 0) {
+		common.ApiErrorI18n(c, i18n.MsgInvalidParams)
+		return
+	}
+	if req.Other != "" {
+		var other map[string]json.RawMessage
+		if err := common.UnmarshalJsonStr(req.Other, &other); err != nil || other == nil {
+			common.ApiErrorI18n(c, i18n.MsgInvalidParams)
+			return
+		}
+	}
+	if req.LogType == model.LogTypeConsume && !common.LogConsumeEnabled {
+		common.ApiErrorMsg(c, "消费日志未启用")
+		return
+	}
+	if err := model.RecordLogWithQuota(req.UserId, req.LogType, req.Quota, req.Content, req.Other, c); err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	common.ApiSuccess(c, nil)
+}
 
 func GetAllLogs(c *gin.Context) {
 	pageInfo := common.GetPageQuery(c)
