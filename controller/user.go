@@ -994,6 +994,7 @@ func CreateUser(c *gin.Context) {
 		Password:    user.Password,
 		DisplayName: user.DisplayName,
 		Role:        user.Role, // 保持管理员设置的角色
+		Group:       user.Group,
 	}
 	authzTouched := false
 	if err := model.DB.Transaction(func(tx *gorm.DB) error {
@@ -1002,7 +1003,28 @@ func CreateUser(c *gin.Context) {
 		}
 		touched, err := updateAdminPermissionsForUserInTx(c, tx, cleanUser.Id, cleanUser.Role, user.AdminPermissions)
 		authzTouched = touched
-		return err
+		if err != nil || !constant.GenerateDefaultToken {
+			return err
+		}
+		key, err := common.GenerateKey()
+		if err != nil {
+			return err
+		}
+		token := model.Token{
+			UserId:             cleanUser.Id,
+			Name:               cleanUser.Username + "的初始令牌",
+			Key:                key,
+			CreatedTime:        common.GetTimestamp(),
+			AccessedTime:       common.GetTimestamp(),
+			ExpiredTime:        -1,
+			RemainQuota:        500000,
+			UnlimitedQuota:     true,
+			ModelLimitsEnabled: false,
+		}
+		if setting.DefaultUseAutoGroup {
+			token.Group = "auto"
+		}
+		return tx.Create(&token).Error
 	}); err != nil {
 		common.ApiError(c, err)
 		return
@@ -1022,6 +1044,7 @@ func CreateUser(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{
 		"success": true,
 		"message": "",
+		"userId":  cleanUser.Id,
 	})
 	return
 }

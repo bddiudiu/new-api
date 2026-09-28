@@ -14,10 +14,12 @@ import (
 	"time"
 
 	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/i18n"
 	"github.com/QuantumNous/new-api/middleware"
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/service/authz"
+	"github.com/QuantumNous/new-api/setting"
 	"github.com/alicebob/miniredis/v2"
 	"github.com/go-redis/redis/v8"
 
@@ -91,6 +93,173 @@ func performManageUserRequest(t *testing.T, body string) *httptest.ResponseRecor
 	c.Set(common.RequestIdKey, "quota-test-request")
 	ManageUser(c)
 	return recorder
+}
+
+func TestCreateUserDefaultTokenTransaction(t *testing.T) {
+	for _, tc := range []struct {
+		name                                  string
+		enabled, auto, permissions, failToken bool
+		failPermissions, ordinary, higherRole bool
+	}{
+		{name: "disabled"},
+		{name: "enabled", enabled: true},
+		{name: "automatic group", enabled: true, auto: true},
+		{name: "admin permissions", enabled: true, permissions: true},
+		{name: "token failure rolls back user and permissions", enabled: true, permissions: true, failToken: true},
+		{name: "permission failure rolls back user", enabled: true, permissions: true, failPermissions: true},
+		{name: "ordinary user cannot create users", enabled: true, ordinary: true},
+		{name: "cannot create equal role", enabled: true, higherRole: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			db := setupManageUserTestDB(t)
+			require.NoError(t, db.AutoMigrate(&model.Token{}))
+			previousEnabled, previousAuto := constant.GenerateDefaultToken, setting.DefaultUseAutoGroup
+			previousQuota, previousMaster := common.QuotaForNewUser, common.IsMasterNode
+			constant.GenerateDefaultToken, setting.DefaultUseAutoGroup = tc.enabled, tc.auto
+			common.QuotaForNewUser, common.IsMasterNode = 0, false
+			t.Cleanup(func() {
+				constant.GenerateDefaultToken, setting.DefaultUseAutoGroup = previousEnabled, previousAuto
+				common.QuotaForNewUser, common.IsMasterNode = previousQuota, previousMaster
+			})
+			require.NoError(t, authz.Init(db))
+			pat := "create-user-test-credential"
+			operator := model.User{Username: "creator", Role: common.RoleRootUser, Status: common.UserStatusEnabled, AuthVersion: 1, AccessToken: &pat, AffCode: "creator"}
+			if tc.ordinary {
+				operator.Role = common.RoleCommonUser
+			}
+			require.NoError(t, db.Create(&operator).Error)
+			if tc.failToken || tc.failPermissions {
+				require.NoError(t, db.Callback().Create().Before("gorm:create").Register("test:fail_account_creation", func(tx *gorm.DB) {
+					if (tc.failToken && tx.Statement.Table == "tokens") || (tc.failPermissions && tx.Statement.Table == "casbin_rule") {
+						tx.AddError(errors.New("injected account creation failure"))
+					}
+				}))
+				t.Cleanup(func() { require.NoError(t, db.Callback().Create().Remove("test:fail_account_creation")) })
+			}
+			role := common.RoleCommonUser
+			var permissions map[string]map[string]bool
+			if tc.permissions {
+				role = common.RoleAdminUser
+				permissions = map[string]map[string]bool{"audit": {"read": true}}
+			}
+			if tc.higherRole {
+				role = operator.Role
+			}
+			body, err := common.Marshal(map[string]any{
+				"username": "created-user", "password": "creation-test-password", "role": role, "group": "business", "admin_permissions": permissions,
+			})
+			require.NoError(t, err)
+			router := gin.New()
+			router.Use(middleware.RequestId())
+			router.POST("/api/user/", middleware.AdminAuth(), CreateUser)
+			request := httptest.NewRequest(http.MethodPost, "/api/user/", strings.NewReader(string(body)))
+			request.Header.Set("Content-Type", "application/json")
+			request.Header.Set("Authorization", "Bearer "+pat)
+			recorder := httptest.NewRecorder()
+			router.ServeHTTP(recorder, request)
+			var response struct {
+				Success bool `json:"success"`
+				UserID  int  `json:"userId"`
+			}
+			require.NoError(t, common.Unmarshal(recorder.Body.Bytes(), &response))
+			var users []model.User
+			var tokens []model.Token
+			require.NoError(t, db.Where("username = ?", "created-user").Find(&users).Error)
+			require.NoError(t, db.Find(&tokens).Error)
+			if tc.failToken || tc.failPermissions || tc.ordinary || tc.higherRole {
+				assert.False(t, response.Success)
+				assert.Zero(t, response.UserID)
+				assert.Empty(t, users)
+				assert.Empty(t, tokens)
+				var policies int64
+				require.NoError(t, db.Model(&model.CasbinRule{}).Where("v0 LIKE ?", "user:%").Count(&policies).Error)
+				assert.Zero(t, policies)
+				return
+			}
+			require.True(t, response.Success, recorder.Body.String())
+			require.Len(t, users, 1)
+			assert.Equal(t, users[0].Id, response.UserID)
+			assert.Equal(t, "business", users[0].Group)
+			assert.NotEqual(t, "creation-test-password", users[0].Password)
+			if !tc.enabled {
+				assert.Empty(t, tokens)
+				return
+			}
+			require.Len(t, tokens, 1)
+			assert.Equal(t, response.UserID, tokens[0].UserId)
+			assert.Equal(t, "created-user的初始令牌", tokens[0].Name)
+			assert.EqualValues(t, -1, tokens[0].ExpiredTime)
+			assert.True(t, tokens[0].UnlimitedQuota)
+			assert.False(t, tokens[0].ModelLimitsEnabled)
+			assert.NotEmpty(t, tokens[0].Key)
+			if tc.auto {
+				assert.Equal(t, "auto", tokens[0].Group)
+			} else {
+				assert.Empty(t, tokens[0].Group)
+			}
+			assert.NotContains(t, recorder.Body.String(), tokens[0].Key)
+			var audits []model.AuditLog
+			require.NoError(t, model.LOG_DB.Find(&audits).Error)
+			encoded, err := common.Marshal(audits)
+			require.NoError(t, err)
+			assert.NotContains(t, string(encoded), tokens[0].Key)
+			assert.NotContains(t, string(encoded), "creation-test-password")
+		})
+	}
+}
+
+func TestAddTokenReturnsCreatedTokenWithoutLeakingToQueriesOrAudit(t *testing.T) {
+	db := setupManageUserTestDB(t)
+	require.NoError(t, db.AutoMigrate(&model.Token{}))
+	pat := "created-token-test-credential"
+	user := model.User{Username: "token-creator", Role: common.RoleCommonUser, Status: common.UserStatusEnabled, AuthVersion: 1, AccessToken: &pat}
+	require.NoError(t, db.Create(&user).Error)
+	router := gin.New()
+	router.Use(middleware.RequestId())
+	tokens := router.Group("/api/token", middleware.UserAuth(), middleware.TokenOperationAudit())
+	tokens.POST("/", middleware.DisableCache(), AddToken)
+	tokens.GET("/:id", GetToken)
+	request := httptest.NewRequest(http.MethodPost, "/api/token/", strings.NewReader(`{"name":"created","user_id":9999,"expired_time":-1,"unlimited_quota":true}`))
+	request.Header.Set("Authorization", "Bearer "+pat)
+	request.Header.Set("Content-Type", "application/json")
+	recorder := httptest.NewRecorder()
+	router.ServeHTTP(recorder, request)
+	var response struct {
+		Success bool        `json:"success"`
+		Data    model.Token `json:"data"`
+	}
+	require.NoError(t, common.Unmarshal(recorder.Body.Bytes(), &response))
+	require.True(t, response.Success)
+	require.Positive(t, response.Data.Id)
+	assert.Equal(t, user.Id, response.Data.UserId)
+	assert.Equal(t, "created", response.Data.Name)
+	require.NotEmpty(t, response.Data.Key)
+	assert.Contains(t, recorder.Header().Get("Cache-Control"), "no-store")
+	var stored model.Token
+	require.NoError(t, db.First(&stored, response.Data.Id).Error)
+	assert.Equal(t, stored.Key, response.Data.Key)
+
+	request = httptest.NewRequest(http.MethodGet, fmt.Sprintf("/api/token/%d", stored.Id), nil)
+	request.Header.Set("Authorization", "Bearer "+pat)
+	recorder = httptest.NewRecorder()
+	router.ServeHTTP(recorder, request)
+	assert.Contains(t, recorder.Body.String(), `"success":true`)
+	assert.NotContains(t, recorder.Body.String(), stored.Key)
+	var audits []model.AuditLog
+	require.NoError(t, model.LOG_DB.Where("action = ?", "token.create").Find(&audits).Error)
+	require.Len(t, audits, 1)
+	assert.True(t, audits[0].Success)
+	encoded, err := common.Marshal(audits)
+	require.NoError(t, err)
+	assert.NotContains(t, string(encoded), stored.Key)
+	assert.NotContains(t, string(encoded), pat)
+
+	recorder = httptest.NewRecorder()
+	router.ServeHTTP(recorder, httptest.NewRequest(http.MethodPost, "/api/token/", strings.NewReader(`{"name":"unauthorized"}`)))
+	assert.Equal(t, http.StatusUnauthorized, recorder.Code)
+	var count int64
+	require.NoError(t, db.Model(&model.Token{}).Count(&count).Error)
+	assert.EqualValues(t, 1, count)
 }
 
 func TestManageUserDisableAdvancesAuthVersionOnceAndRevokesSession(t *testing.T) {
