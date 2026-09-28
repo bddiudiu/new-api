@@ -1,7 +1,9 @@
 package openai
 
 import (
+	"cmp"
 	"fmt"
+	"slices"
 	"strings"
 
 	"github.com/QuantumNous/new-api/common"
@@ -137,7 +139,51 @@ func ProcessStreamResponse(streamResponse dto.ChatCompletionsStreamResponse, res
 	return nil
 }
 
-func processTokenData(info *relaycommon.RelayInfo, data string, responseTextBuilder *strings.Builder, toolCount *int) error {
+type streamToolCallKey struct {
+	choiceIndex int
+	toolIndex   int
+}
+
+// Stream metadata is separate from billing observations. Different choices may
+// use the same tool index and must never share their argument buffers.
+type streamToolCall struct {
+	call      dto.ToolCallResponse
+	name      strings.Builder
+	arguments strings.Builder
+}
+
+type streamToolCalls map[streamToolCallKey]*streamToolCall
+
+func (calls streamToolCalls) observe(response dto.ChatCompletionsStreamResponse) {
+	if calls == nil {
+		return
+	}
+	for _, choice := range response.Choices {
+		for i, tool := range choice.Delta.ToolCalls {
+			index := i
+			if tool.Index != nil {
+				index = *tool.Index
+			}
+			key := streamToolCallKey{choice.Index, index}
+			current := calls[key]
+			if current == nil {
+				current = &streamToolCall{call: tool}
+				current.call.SetIndex(index)
+				calls[key] = current
+			}
+			if tool.ID != "" {
+				current.call.ID = tool.ID
+			}
+			if tool.Type != nil && tool.Type != "" {
+				current.call.Type = tool.Type
+			}
+			current.name.WriteString(tool.Function.Name)
+			current.arguments.WriteString(tool.Function.Arguments)
+		}
+	}
+}
+
+func processTokenData(info *relaycommon.RelayInfo, data string, responseTextBuilder *strings.Builder, toolCount *int, calls streamToolCalls) error {
 	switch info.RelayMode {
 	case relayconstant.RelayModeChatCompletions:
 		var streamResponse dto.ChatCompletionsStreamResponse
@@ -145,6 +191,7 @@ func processTokenData(info *relaycommon.RelayInfo, data string, responseTextBuil
 			return err
 		}
 		info.ObserveResponseModel(streamResponse.Model)
+		calls.observe(streamResponse)
 		return ProcessStreamResponse(streamResponse, responseTextBuilder, toolCount)
 	case relayconstant.RelayModeCompletions:
 		var streamResponse dto.CompletionsStreamResponse
@@ -192,10 +239,41 @@ func handleLastResponse(lastStreamData string, responseId *string, createAt *int
 
 func HandleFinalResponse(c *gin.Context, info *relaycommon.RelayInfo, lastStreamData string,
 	responseId string, createAt int64, model string, systemFingerprint string,
-	usage *dto.Usage, containStreamUsage bool) {
+	usage *dto.Usage, containStreamUsage bool, calls streamToolCalls) {
 
 	switch info.RelayFormat {
 	case types.RelayFormatOpenAI:
+		if len(calls) > 0 {
+			keys := make([]streamToolCallKey, 0, len(calls))
+			for key := range calls {
+				keys = append(keys, key)
+			}
+			slices.SortFunc(keys, func(a, b streamToolCallKey) int {
+				if order := cmp.Compare(a.choiceIndex, b.choiceIndex); order != 0 {
+					return order
+				}
+				return cmp.Compare(a.toolIndex, b.toolIndex)
+			})
+			toolCalls := make([]dto.ToolCallResponse, 0, len(keys))
+			for _, key := range keys {
+				entry := calls[key]
+				call := entry.call
+				call.Function.Name = entry.name.String()
+				call.Function.Arguments = entry.arguments.String()
+				toolCalls = append(toolCalls, call)
+			}
+			response := &dto.ChatCompletionsStreamResponse{
+				Id:       responseId,
+				Type:     "meta.info",
+				Object:   "chat.completion.chunk",
+				Created:  createAt,
+				Model:    model,
+				Choices:  []dto.ChatCompletionsStreamResponseChoice{},
+				MetaInfo: &dto.MetaInfo{ToolCalls: toolCalls},
+			}
+			response.SetSystemFingerprint(systemFingerprint)
+			helper.ObjectData(c, response)
+		}
 		if info.ShouldIncludeUsage && !containStreamUsage {
 			response := helper.GenerateFinalUsageResponse(responseId, createAt, model, *usage)
 			response.SetSystemFingerprint(systemFingerprint)
