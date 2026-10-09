@@ -155,7 +155,9 @@ func TestCreateUserDefaultTokenTransaction(t *testing.T) {
 				common.QuotaForNewUser, common.IsMasterNode = previousQuota, previousMaster
 			})
 			require.NoError(t, authz.Init(db))
-			operator := model.User{Username: "creator", Role: common.RoleRootUser, Status: common.UserStatusEnabled, AuthVersion: 1, AffCode: "creator"}
+			password, err := common.Password2Hash("operator-password")
+			require.NoError(t, err)
+			operator := model.User{Username: "creator", Password: password, Role: common.RoleRootUser, Status: common.UserStatusEnabled, AuthVersion: 1, AffCode: "creator"}
 			if tc.ordinary {
 				operator.Role = common.RoleCommonUser
 			}
@@ -192,9 +194,11 @@ func TestCreateUserDefaultTokenTransaction(t *testing.T) {
 			if tc.permissions && !tc.missingProof {
 				identity, err := service.ParseAccessToken(bundle.AccessToken)
 				require.NoError(t, err)
+				context, err := common.Marshal(service.AdminUserCreateContext{Role: role})
+				require.NoError(t, err)
 				binding, err := service.BindVerificationOperation(service.VerificationOperation{
 					Scope:   service.VerificationScopeAdminUserCreate,
-					Context: service.AdminUserCreateContext{Role: role},
+					Context: context,
 				})
 				require.NoError(t, err)
 				proof, _, err := service.IssueSecurityProof(identity, service.VerificationMethodPassword, binding)
@@ -257,9 +261,9 @@ func TestCreateUserDefaultTokenTransaction(t *testing.T) {
 func TestAddTokenReturnsCreatedTokenWithoutLeakingToQueriesOrAudit(t *testing.T) {
 	db := setupManageUserTestDB(t)
 	require.NoError(t, db.AutoMigrate(&model.Token{}))
-	pat := "created-token-test-credential"
-	user := model.User{Username: "token-creator", Role: common.RoleCommonUser, Status: common.UserStatusEnabled, AuthVersion: 1, AccessToken: &pat}
+	user := model.User{Username: "token-creator", Role: common.RoleCommonUser, Status: common.UserStatusEnabled, AuthVersion: 1}
 	require.NoError(t, db.Create(&user).Error)
+	pat, _ := createScopedAccessToken(t, user.Id, time.Now().Unix()+3600, "api_key:write", "api_key:read")
 	router := gin.New()
 	router.Use(middleware.RequestId())
 	tokens := router.Group("/api/token", middleware.UserAuth(), middleware.TokenOperationAudit())
