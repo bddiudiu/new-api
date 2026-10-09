@@ -233,6 +233,7 @@ var accessTokenRouteRules = map[string]accessTokenRouteRule{
 	"DELETE /api/redemption/:id":     accessTokenScopeRule("redemption:write"),
 
 	// router/api-router.go: /api/audit, /api/log, /api/data
+	"POST /api/log/quota":                       accessTokenScopeRule("log:write"),
 	"GET /api/audit/self":                       accessTokenScopeRule("usage:read"),
 	"GET /api/log/":                             accessTokenScopeRule("log:read"),
 	"GET /api/log/stat":                         accessTokenScopeRule("log:read"),
