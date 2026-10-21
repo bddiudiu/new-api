@@ -291,22 +291,26 @@ func RecordTopupLog(userId int, content *common.Message, callerIp string, paymen
 	username, _ := GetUsernameById(userId, false)
 	other := NewLogOther()
 	other.MergeAdmin(map[string]any{
-		"server_ip":               common.GetIp(),
-		"node_name":               common.NodeName,
 		"caller_ip":               callerIp,
 		"payment_method":          paymentMethod,
 		"callback_payment_method": callbackPaymentMethod,
-		"version":                 common.Version,
 	})
-	log := &Log{
-		UserId:    userId,
-		Username:  username,
-		CreatedAt: common.GetTimestamp(),
-		Type:      LogTypeTopup,
-		Content:   other.setContent([]*common.Message{content}),
-		Ip:        callerIp,
-		Other:     other.JSONString(),
-	}
+	recordTopupLog(&Log{UserId: userId, Username: username}, content, callerIp, other)
+}
+
+// recordTopupLog shares server metadata across payment and redemption top-ups;
+// callers supply only the audit fields applicable to their source.
+func recordTopupLog(log *Log, content *common.Message, callerIp string, other *LogOther) {
+	other.MergeAdmin(map[string]any{
+		"server_ip": common.GetIp(),
+		"node_name": common.NodeName,
+		"version":   common.Version,
+	})
+	log.CreatedAt = common.GetTimestamp()
+	log.Type = LogTypeTopup
+	log.Content = other.setContent([]*common.Message{content})
+	log.Ip = callerIp
+	log.Other = other.JSONString()
 	err := createLog(log)
 	if err != nil {
 		common.SysLog(common.LogText("failed to record topup log: %s", err.Error()))
