@@ -2,6 +2,7 @@ package model
 
 import (
 	"context"
+	"slices"
 	"strings"
 	"time"
 
@@ -80,15 +81,27 @@ type Log struct {
 
 // don't use iota, avoid change log type value
 const (
-	LogTypeUnknown = 0
-	LogTypeTopup   = 1
-	LogTypeConsume = 2
-	LogTypeManage  = 3
-	LogTypeSystem  = 4
-	LogTypeError   = 5
-	LogTypeRefund  = 6
-	LogTypeLogin   = 7
+	LogTypeUnknown     = 0
+	LogTypeTopup       = 1
+	LogTypeConsume     = 2
+	LogTypeManage      = 3
+	LogTypeSystem      = 4
+	LogTypeError       = 5
+	LogTypeRefund      = 6
+	LogTypeLogin       = 7
+	LogTypeMeeting     = 8
+	LogTypeActive      = 9
+	LogTypeUnlock      = 10
+	LogTypeCheckin     = 11
+	LogTypeQuotaExpiry = 12
+	LogTypeVoice       = 13
 )
+
+var quotaConsumeLogTypes = []int{LogTypeConsume, LogTypeMeeting, LogTypeUnlock, LogTypeVoice}
+
+func IsQuotaConsumeLogType(logType int) bool {
+	return slices.Contains(quotaConsumeLogTypes, logType)
+}
 
 func ensureLogRequestId(log *Log) {
 	if log != nil && log.RequestId == "" {
@@ -163,6 +176,31 @@ func RecordLog(userId int, logType int, content *common.Message) {
 	if err != nil {
 		common.SysLog(common.LogText("failed to record log: %s", err.Error()))
 	}
+}
+
+// RecordLogWithQuota records business usage without changing the user's wallet.
+func RecordLogWithQuota(userId, logType, quota int, content, other string, request ...*gin.Context) error {
+	if logType == LogTypeConsume && !common.LogConsumeEnabled {
+		return nil
+	}
+	user, err := GetUserById(userId, false)
+	if err != nil {
+		return err
+	}
+	log := &Log{
+		UserId:    user.Id,
+		Username:  user.Username,
+		Group:     user.Group,
+		CreatedAt: common.GetTimestamp(),
+		Type:      logType,
+		Quota:     quota,
+		Content:   content,
+		Other:     formatLogOtherJSON(other, logOtherVisibilityRoot),
+	}
+	if len(request) > 0 && request[0] != nil {
+		log.RequestId = request[0].GetString(common.RequestIdKey)
+	}
+	return createLog(log)
 }
 
 // RecordLogWithAdminInfo stores operator metadata under other.admin_info and
@@ -253,22 +291,26 @@ func RecordTopupLog(userId int, content *common.Message, callerIp string, paymen
 	username, _ := GetUsernameById(userId, false)
 	other := NewLogOther()
 	other.MergeAdmin(map[string]any{
-		"server_ip":               common.GetIp(),
-		"node_name":               common.NodeName,
 		"caller_ip":               callerIp,
 		"payment_method":          paymentMethod,
 		"callback_payment_method": callbackPaymentMethod,
-		"version":                 common.Version,
 	})
-	log := &Log{
-		UserId:    userId,
-		Username:  username,
-		CreatedAt: common.GetTimestamp(),
-		Type:      LogTypeTopup,
-		Content:   other.setContent([]*common.Message{content}),
-		Ip:        callerIp,
-		Other:     other.JSONString(),
-	}
+	recordTopupLog(&Log{UserId: userId, Username: username}, content, callerIp, other)
+}
+
+// recordTopupLog shares server metadata across payment and redemption top-ups;
+// callers supply only the audit fields applicable to their source.
+func recordTopupLog(log *Log, content *common.Message, callerIp string, other *LogOther) {
+	other.MergeAdmin(map[string]any{
+		"server_ip": common.GetIp(),
+		"node_name": common.NodeName,
+		"version":   common.Version,
+	})
+	log.CreatedAt = common.GetTimestamp()
+	log.Type = LogTypeTopup
+	log.Content = other.setContent([]*common.Message{content})
+	log.Ip = callerIp
+	log.Other = other.JSONString()
 	err := createLog(log)
 	if err != nil {
 		common.SysLog(common.LogText("failed to record topup log: %s", err.Error()))
@@ -723,8 +765,8 @@ func SumUsedQuota(logType int, startTimestamp int64, endTimestamp int64, modelNa
 		rpmTpmQuery = rpmTpmQuery.Where(logGroupCol+" = ?", group)
 	}
 
-	tx = tx.Where("type = ?", LogTypeConsume)
-	rpmTpmQuery = rpmTpmQuery.Where("type = ?", LogTypeConsume)
+	tx = tx.Where("type IN ?", quotaConsumeLogTypes)
+	rpmTpmQuery = rpmTpmQuery.Where("type IN ?", quotaConsumeLogTypes)
 
 	// 只统计最近60秒的rpm和tpm
 	rpmTpmQuery = rpmTpmQuery.Where("created_at >= ?", time.Now().Add(-60*time.Second).Unix())
@@ -765,7 +807,7 @@ func SumUsedToken(logType int, startTimestamp int64, endTimestamp int64, modelNa
 	if modelName != "" {
 		tx = tx.Where("model_name = ?", modelName)
 	}
-	tx.Where("type = ?", LogTypeConsume).Scan(&token)
+	tx.Where("type IN ?", quotaConsumeLogTypes).Scan(&token)
 	return token
 }
 

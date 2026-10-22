@@ -144,14 +144,20 @@ type FunctionResponse struct {
 	Arguments  string `json:"arguments"`            // response
 }
 
+type MetaInfo struct {
+	ToolCalls []ToolCallResponse `json:"tool_calls,omitempty"`
+}
+
 type ChatCompletionsStreamResponse struct {
 	Id                string                                `json:"id"`
+	Type              string                                `json:"type,omitempty"`
 	Object            string                                `json:"object"`
 	Created           int64                                 `json:"created"`
 	Model             string                                `json:"model"`
 	SystemFingerprint *string                               `json:"system_fingerprint"`
 	Choices           []ChatCompletionsStreamResponseChoice `json:"choices"`
 	Usage             *Usage                                `json:"usage"`
+	MetaInfo          *MetaInfo                             `json:"metainfo,omitempty"`
 }
 
 func (c *ChatCompletionsStreamResponse) IsFinished() bool {
@@ -193,12 +199,14 @@ func (c *ChatCompletionsStreamResponse) Copy() *ChatCompletionsStreamResponse {
 	copy(choices, c.Choices)
 	return &ChatCompletionsStreamResponse{
 		Id:                c.Id,
+		Type:              c.Type,
 		Object:            c.Object,
 		Created:           c.Created,
 		Model:             c.Model,
 		SystemFingerprint: c.SystemFingerprint,
 		Choices:           choices,
 		Usage:             c.Usage,
+		MetaInfo:          c.MetaInfo,
 	}
 }
 
