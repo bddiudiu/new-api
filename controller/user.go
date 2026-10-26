@@ -444,24 +444,16 @@ func TransferAffQuota(c *gin.Context) {
 
 func GetAffCode(c *gin.Context) {
 	id := c.GetInt("id")
-	user, err := model.GetUserById(id, true)
+	affCode, err := model.GetOrCreateUserAffCode(id)
 	if err != nil {
 		common.ApiError(c, err)
 		return
 	}
-	if user.AffCode == "" {
-		user.AffCode = common.GetRandomString(4)
-		if err := user.Update(false); err != nil {
-			common.ApiError(c, err)
-			return
-		}
-	}
 	c.JSON(http.StatusOK, gin.H{
 		"success": true,
 		"message": "",
-		"data":    user.AffCode,
+		"data":    affCode,
 	})
-	return
 }
 
 func GetSelf(c *gin.Context) {
@@ -1035,6 +1027,7 @@ func CreateUser(c *gin.Context) {
 		Password:    user.Password,
 		DisplayName: user.DisplayName,
 		Role:        user.Role, // 保持管理员设置的角色
+		Group:       user.Group,
 	}
 	authzTouched := false
 	if err := model.DB.Transaction(func(tx *gorm.DB) error {
@@ -1043,7 +1036,29 @@ func CreateUser(c *gin.Context) {
 		}
 		touched, err := updateAdminPermissionsForUserInTx(c, tx, cleanUser.Id, cleanUser.Role, user.AdminPermissions)
 		authzTouched = touched
-		return err
+		if err != nil || !constant.GenerateDefaultToken {
+			return err
+		}
+		key, err := common.GenerateKey()
+		if err != nil {
+			return err
+		}
+		token := model.Token{
+			UserId:             cleanUser.Id,
+			Name:               i18n.T(c, i18n.MsgUserDefaultTokenName, map[string]any{"Username": cleanUser.Username}),
+			Key:                key,
+			CreatedTime:        common.GetTimestamp(),
+			AccessedTime:       common.GetTimestamp(),
+			ExpiredTime:        -1,
+			RemainQuota:        500000,
+			UnlimitedQuota:     true,
+			ModelLimitsEnabled: false,
+		}
+		token.AllowUserQuotaQuery = true
+		if setting.DefaultUseAutoGroup {
+			token.Group = "auto"
+		}
+		return tx.Create(&token).Error
 	}); err != nil {
 		common.ApiError(c, err)
 		return
@@ -1061,6 +1076,7 @@ func CreateUser(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{
 		"success": true,
 		"message": "",
+		"userId":  cleanUser.Id,
 	})
 	return
 }
@@ -1301,7 +1317,7 @@ func TopUp(c *gin.Context) {
 		common.ApiError(c, err)
 		return
 	}
-	quota, err := model.Redeem(req.Key, id)
+	quota, err := model.Redeem(req.Key, id, c.ClientIP())
 	if err != nil {
 		// 不向用户暴露兑换失败的细分原因，避免攻击者根据错误类型判断兑换码状态。
 		common.ApiErrorT(c, "Redemption failed, please try again later")
