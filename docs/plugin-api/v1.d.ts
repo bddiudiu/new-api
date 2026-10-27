@@ -39,20 +39,23 @@ export type SubmitIntent = {kind: "submit"; model: string; action?: string; requ
 export type QueryIntent = {kind: "query"; taskIds: readonly string[]};
 export type TaskIntent = SubmitIntent | QueryIntent;
 export interface NativeRoute {method: "GET" | "POST" | "PUT" | "PATCH" | "DELETE"; path: string; type: "submit" | "query" | "dynamic"; action?: string; taskIdParam?: string; decode?: string; render: string; models?: readonly string[]; retainResult?: boolean}
-export type ProtocolName = "openai_responses" | "openai_video" | "openai_image";
+export type ProtocolName = "openai_responses" | "openai_video" | "openai_image" | "openai_speech";
 export type ResponsesMode = "stream" | "sync" | "background";
 export type ProtocolClaim =
   | "openai_video"
   | "openai_image"
   | {name: "openai_responses"; supports: readonly ResponsesMode[]; models?: readonly string[]}
+  | {name: "openai_speech"; supports: readonly "sync"[]; models?: readonly string[]}
   | {name: "openai_video"; models?: readonly string[]}
   | {name: "openai_image"; models?: readonly string[]};
 /** One entry of the OpenAI ImageResponse `data` array rendered by protocols.openai_image.render. */
 export type ImageResponseEntry = {url?: string; b64_json?: string; revised_prompt?: string};
+/** Selects a completed MP3 audio artifact. The host returns its bytes. */
+export type SpeechResponseDescriptor = {artifactKey: string};
 export type LocalizedText = string | ({ en: string } & Record<string, string>);
 export type UsageFieldSchema =
   | {type: "number"; unit: "count"; unitLabel?: LocalizedText; description?: LocalizedText}
-  | {type: "number"; unit: "second" | "token" | "credit"; unitLabel?: never; description?: LocalizedText}
+  | {type: "number"; unit: "second" | "token" | "credit" | "character"; unitLabel?: never; description?: LocalizedText}
   | {type: "boolean"; unitLabel?: never; description?: LocalizedText}
   | {enum: readonly string[]; unitLabel?: never; description?: LocalizedText; enumLabels?: Readonly<Record<string, LocalizedText>>};
 export type UsageExample = {label: string; facts: Readonly<Record<string, string | number | boolean>>};
@@ -72,6 +75,7 @@ export declare const native: Record<string, ((ctx: NativeDecodeContext) => TaskI
 export declare const protocols: {
   openai_responses?: {decodeRequest(ctx: ProtocolDecodeContext): SubmitIntent; renderEvents?(ctx: unknown, task: TaskView, previousState: unknown): unknown; renderFinal?(ctx: unknown, task: TaskView): unknown};
   openai_video?: {decodeRequest(ctx: ProtocolDecodeContext): SubmitIntent; render(ctx: unknown, task: TaskView): unknown};
+  openai_speech?: {decodeRequest(ctx: ProtocolDecodeContext): SubmitIntent; render(ctx: unknown, task: TaskView): SpeechResponseDescriptor};
   /** render returns the OpenAI ImageResponse; the host adds `created` when absent and resolves response_format b64_json. */
   openai_image?: {decodeRequest(ctx: ProtocolDecodeContext): SubmitIntent; render(ctx: unknown, task: TaskView): {created?: number; data: readonly ImageResponseEntry[]} & Record<string, unknown>};
 };

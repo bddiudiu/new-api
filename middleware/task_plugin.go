@@ -529,10 +529,17 @@ func jsonBodyBoolFlags(c *gin.Context) (stream, background bool) {
 		return false, false
 	}
 	values := gjson.GetManyBytes(requestBody, "stream", "background")
-	return values[0].Type == gjson.True, values[1].Type == gjson.True
+	stream = values[0].Type == gjson.True
+	if c.Request.URL.Path == "/v1/audio/speech" && gjson.GetBytes(requestBody, "stream_format").String() == "sse" {
+		stream = true
+	}
+	return stream, values[1].Type == gjson.True
 }
 
 func unsupportedProtocolFormMessage(candidates []pluginruntime.ProtocolBinding, protocol string, stream, background bool) string {
+	if protocol == pluginruntime.ProtocolOpenAISpeech {
+		return `Speech supports synchronous audio only. Remove stream/background and use "stream_format": "audio".`
+	}
 	supports := func(mode string) bool {
 		for _, candidate := range candidates {
 			if candidate.Plugin != nil && candidate.Plugin.Meta.ProtocolSupports(protocol, mode) {

@@ -502,8 +502,12 @@ func (a *TaskAdaptor) ParseResponse(c *gin.Context, resp *http.Response, info *r
 	streaming := a.submit != nil && a.submit.ResponseType == "sse"
 	mediaType, _, _ := mime.ParseMediaType(resp.Header.Get("Content-Type"))
 	acceptedStream := streaming || mediaType == "text/event-stream"
+	pinnedValue, _ := c.Get(pluginruntime.ContextKeyPinnedEndpoint)
+	pinned, _ := pinnedValue.(pluginruntime.PinnedEndpoint)
 	defer func() {
-		if acceptedStream && taskErr != nil {
+		// A synchronous speech response may already represent billable work,
+		// even when its JSON is damaged or the provider rejects the content.
+		if taskErr != nil && (acceptedStream || pinned.Protocol == pluginruntime.ProtocolOpenAISpeech) {
 			taskErr.NoRetry = true
 		}
 	}()
@@ -1803,6 +1807,11 @@ func validateUsageValue(value any, schema pluginruntime.UsageFieldSchema) (float
 	limit := relaycommon.MaxTaskDurationSeconds
 	if schema.Unit == "count" {
 		limit = kitdto.MaxImageN
+	} else if schema.Unit == "character" {
+		limit = relaycommon.MaxTaskCharacters
+		if math.Trunc(number) != number {
+			return 0, fmt.Errorf("plugin character usage must be an integer")
+		}
 	}
 	if err := validateUsageNumberLimit(number, limit); err != nil {
 		return 0, err

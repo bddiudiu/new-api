@@ -2323,3 +2323,35 @@ func TestRouteTaskPluginEndpointUsesSelectedChannel(t *testing.T) {
 		})
 	}
 }
+
+func TestMiniMaxSpeechFormsAreValidatedBeforeSubmission(t *testing.T) {
+	for _, tc := range []struct {
+		name, body string
+		status     int
+		claimed    bool
+	}{
+		{"synchronous", `{"model":"speech-2.8-turbo","input":"hello","voice":"female-shaonv","stream_format":"audio"}`, 204, true},
+		{"SSE", `{"model":"speech-2.8-turbo","input":"hello","voice":"female-shaonv","stream_format":"sse"}`, 400, false},
+		{"stream", `{"model":"speech-2.8-turbo","stream":true}`, 400, false},
+		{"background", `{"model":"speech-2.8-turbo","background":true}`, 400, false},
+		{"unsupported format", `{"model":"speech-2.8-turbo","input":"hello","voice":"female-shaonv","response_format":"wav"}`, 400, false},
+		{"ordinary fallback", `{"model":"tts-1","input":"hello","voice":"alloy","stream_format":"sse"}`, 204, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			reached := false
+			engine := gin.New()
+			engine.POST("/v1/audio/speech", PinTaskPluginEndpoint(), PrepareTaskPluginEndpoint(), func(c *gin.Context) {
+				reached = true
+				_, claimed := c.Get(jsplugin.ContextKeyPinnedEndpoint)
+				assert.Equal(t, tc.claimed, claimed)
+				c.Status(http.StatusNoContent)
+			})
+			request := httptest.NewRequest(http.MethodPost, "/v1/audio/speech", strings.NewReader(tc.body))
+			request.Header.Set("Content-Type", "application/json")
+			recorder := httptest.NewRecorder()
+			engine.ServeHTTP(recorder, request)
+			assert.Equal(t, tc.status, recorder.Code, recorder.Body.String())
+			assert.Equal(t, tc.status == 204, reached)
+		})
+	}
+}

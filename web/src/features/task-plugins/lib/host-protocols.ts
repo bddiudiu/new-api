@@ -37,6 +37,9 @@ export type HostProtocolEndpoint = {
  * Colon path params are written in `{brace}` form to match the public docs.
  */
 export const HOST_PROTOCOL_ENDPOINTS: Record<string, HostProtocolEndpoint[]> = {
+  openai_speech: [
+    { method: 'POST', path: '/v1/audio/speech', modeBearing: true },
+  ],
   openai_responses: [
     { method: 'POST', path: '/v1/responses', modeBearing: true },
     { method: 'GET', path: '/v1/responses/{response_id}' },

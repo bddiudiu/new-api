@@ -15,6 +15,7 @@
     "fetchMode": {"enum": ["per_task", "batch"]}, "allowedHosts": {"type": "array", "uniqueItems": true, "items": {"type": "string"}},
     "upstreams": {"type": "array", "uniqueItems": true, "items": {"$ref": "#/$defs/upstreamKind"}, "description": "Upstream kinds the driver addresses. vendor is implied; new_api makes the plugin bindable to type-60 New API channels."},
     "protocols": {"type": "array", "uniqueItems": true, "items": {"oneOf": [
+      {"type": "object", "additionalProperties": false, "required": ["name", "supports"], "properties": {"name": {"const": "openai_speech"}, "supports": {"type": "array", "minItems": 1, "uniqueItems": true, "items": {"const": "sync"}}, "models": {"type": "array", "minItems": 1, "uniqueItems": true, "items": {"type": "string", "minLength": 1}}}},
       {"enum": ["openai_video", "openai_image"]},
       {"type": "object", "additionalProperties": false, "required": ["name", "supports"], "properties": {"name": {"const": "openai_responses"}, "supports": {"type": "array", "minItems": 1, "uniqueItems": true, "items": {"enum": ["stream", "sync", "background"]}}, "models": {"type": "array", "minItems": 1, "uniqueItems": true, "items": {"type": "string", "minLength": 1}}}},
       {"type": "object", "additionalProperties": false, "required": ["name"], "properties": {"name": {"enum": ["openai_video", "openai_image"]}, "models": {"type": "array", "minItems": 1, "uniqueItems": true, "items": {"type": "string", "minLength": 1}}}}
@@ -58,7 +59,7 @@
       "additionalProperties": false,
       "properties": {
         "type": {"enum": ["number", "boolean"]},
-        "unit": {"enum": ["second", "count", "token", "credit"]},
+        "unit": {"enum": ["second", "count", "token", "credit", "character"]},
         "unitLabel": {"$ref": "#/$defs/usageLabel", "description": "Optional localized display unit for number fields with count unit. Does not change usage quantities or billing."},
         "enum": {"type": "array", "minItems": 1, "uniqueItems": true, "items": {"type": "string"}},
         "description": {"$ref": "#/$defs/usageLabel"},

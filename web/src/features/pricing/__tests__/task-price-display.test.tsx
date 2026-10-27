@@ -664,3 +664,14 @@ it('shows provider count, price range and missing-price status in both list and 
   expect(screen.getByText('0.4 – 0.8/s')).toBeVisible()
   expect(screen.getByText('$0.4 – $0.8')).toBeVisible()
 })
+
+it('displays character unit prices per 10K in the shared breakdown', () => {
+  render(
+    <DynamicPricingBreakdown
+      billingExpr='tier("tts", u("characters") * 0.3 / 10000)'
+      usageSchema={{ characters: { type: 'number', unit: 'character' } }}
+    />
+  )
+  expect(screen.getAllByText('$0.3/10K characters').length).toBeGreaterThan(0)
+  expect(screen.queryByText(/1M token/)).not.toBeInTheDocument()
+})

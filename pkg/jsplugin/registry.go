@@ -1617,8 +1617,8 @@ func validateUsageFieldSchema(name string, field UsageFieldSchema) error {
 	if field.Type != "number" {
 		return fmt.Errorf("plugin meta usageSchema field %q type must be number or boolean", name)
 	}
-	if field.Unit != "second" && field.Unit != "count" && field.Unit != "token" && field.Unit != "credit" {
-		return fmt.Errorf("plugin meta usageSchema field %q unit must be second, count, token, or credit", name)
+	if field.Unit != "second" && field.Unit != "count" && field.Unit != "token" && field.Unit != "credit" && field.Unit != "character" {
+		return fmt.Errorf("plugin meta usageSchema field %q unit must be second, count, token, credit, or character", name)
 	}
 	return nil
 }
@@ -1744,6 +1744,11 @@ func validateUsageExampleValue(value any, field UsageFieldSchema) error {
 	limit := float64(relaycommon.MaxTaskDurationSeconds)
 	if field.Unit == "count" {
 		limit = float64(dto.MaxImageN)
+	} else if field.Unit == "character" {
+		limit = float64(relaycommon.MaxTaskCharacters)
+		if math.Trunc(number) != number {
+			return fmt.Errorf("must be an integer")
+		}
 	} else if field.Unit == "token" || field.Unit == "credit" {
 		limit = float64(common.MaxQuota)
 	}
