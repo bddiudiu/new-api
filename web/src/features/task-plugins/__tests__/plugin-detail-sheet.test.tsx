@@ -205,6 +205,17 @@ describe('PluginDetailSheet host protocol endpoints', () => {
     expect(screen.queryByText('background')).toBeNull()
   })
 
+  test('speech claims display the standard audio endpoint and synchronous mode', async () => {
+    renderSheet({
+      protocols: [{ name: 'openai_speech', supports: ['sync'] }],
+    })
+    expect(await screen.findByText('/v1/audio/speech')).toBeInTheDocument()
+    expect(endpointRow('/v1/audio/speech').textContent).toContain('POST')
+    expect(screen.getByText('sync')).toBeInTheDocument()
+    expect(screen.queryByText('stream')).toBeNull()
+    expect(screen.queryByText('background')).toBeNull()
+  })
+
   test('given a claim narrowing the protocol to a model subset, the subset is marked without printing the model list', async () => {
     renderSheet({
       models: ['kling-v1', 'kling-v2-master'],

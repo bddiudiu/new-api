@@ -21,6 +21,7 @@ import i18next from 'i18next'
 import { afterEach, describe, expect, test } from 'vitest'
 
 import type { BillingUsageSchema } from '@/features/pricing/types'
+import zh from '@/i18n/locales/zh.json'
 
 import { UsageSchemaTable } from '../components/usage-schema-table'
 
@@ -104,4 +105,21 @@ describe('UsageSchemaTable layout', () => {
     expect(resolutionRow).not.toBeNull()
     expect(resolutionRow?.textContent).toContain('—')
   })
+})
+
+test('character quantities display the translated character unit', async () => {
+  i18next.addResourceBundle('zhCN', 'translation', {
+    character: zh.translation.character,
+  })
+  render(
+    <UsageSchemaTable
+      schema={{ characters: { type: 'number', unit: 'character' } }}
+    />
+  )
+  expect(
+    screen.getByRole('cell', { name: 'character' })
+  ).toBeVisible()
+  await act(() => i18next.changeLanguage('zhCN'))
+  expect(screen.getByRole('cell', { name: '字符' })).toBeVisible()
+  await act(() => i18next.changeLanguage('en'))
 })

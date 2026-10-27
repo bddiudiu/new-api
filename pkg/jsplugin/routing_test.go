@@ -1125,3 +1125,27 @@ func routingProtocolExport(name string) string {
 		renderFinal: function(ctx, task) { return task; }
 	}};`, name)
 }
+
+func TestOpenAISpeechRequiresSyncAndAudioContentHooks(t *testing.T) {
+	const declaration = `protocols:[{name:"openai_speech",supports:["sync"]}],`
+	const exports = `export const protocols={openai_speech:{decodeRequest(ctx){return {kind:"submit",model:ctx.model,requestBody:ctx.body.value}},render(){return {artifactKey:"audio"}}}};
+ export function listArtifacts(){return []}
+ export function buildContentRequest(){return {}}`
+	registry := NewRegistry()
+	plugin, err := registry.RegisterFactory(routingTestPluginSource("speech", 0, `["speech-model"]`, declaration, exports), Options{})
+	require.NoError(t, err)
+	binding, ok := registry.Generation().LookupEndpoint(http.MethodPost, "/v1/audio/speech", "speech-model")
+	require.True(t, ok)
+	assert.Same(t, plugin, binding.Plugin)
+	assert.Equal(t, ProtocolOpenAISpeech, binding.Protocol)
+	for _, tc := range []struct{ name, manifest, hooks string }{
+		{"bare claim", `protocols:["openai_speech"],`, exports},
+		{"stream", `protocols:[{name:"openai_speech",supports:["stream"]}],`, exports},
+		{"content missing", declaration, `export const protocols={openai_speech:{decodeRequest(){return {}},render(){return {artifactKey:"audio"}}}};`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := CompilePlugin(routingTestPluginSource("bad-speech", 0, `["speech-model"]`, tc.manifest, tc.hooks), Options{})
+			require.Error(t, err)
+		})
+	}
+}

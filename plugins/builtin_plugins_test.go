@@ -11,7 +11,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-var expectedKeys = []string{"alibaba", "doubao", "google", "hailuo", "jimeng", "kling", "sora", "sunoapi", "vertex-ai", "vidu", "xai"}
+var expectedKeys = []string{"alibaba", "doubao", "google", "hailuo", "jimeng", "kling", "minimax-tts", "sora", "sunoapi", "vertex-ai", "vidu", "xai"}
 
 func TestBuiltInVendorPluginsDeclareNativeRoutesAndLegacyChannelTypes(t *testing.T) {
 	generation := jsplugin.DefaultRegistry.Generation()
@@ -117,6 +117,15 @@ func TestBuiltInTaskPluginResponsesAndUsageContracts(t *testing.T) {
 			require.NoError(t, registerErr)
 
 			var responsesClaim jsplugin.ProtocolClaim
+			if key == "minimax-tts" {
+				assert.True(t, plugin.Meta.ProtocolSupports(jsplugin.ProtocolOpenAISpeech, "sync"))
+				for _, model := range plugin.Meta.Models {
+					binding, claimed := registry.Generation().LookupEndpoint("POST", "/v1/audio/speech", model)
+					require.True(t, claimed, model)
+					assert.Same(t, plugin, binding.Plugin)
+				}
+				return
+			}
 			foundResponses := false
 			for _, claim := range plugin.Meta.Protocols {
 				if claim.Name == "openai_responses" {
@@ -162,10 +171,15 @@ func TestBuiltInResponsesDecodersEchoChannelMappedAlias(t *testing.T) {
 			alias := "alias-under-test"
 			upstreamModel := plugin.Meta.Models[0]
 			body := map[string]any{"model": alias, "input": "a cat walking on the beach"}
+			protocol := "openai_responses"
+			if key == "minimax-tts" {
+				protocol = jsplugin.ProtocolOpenAISpeech
+				body["voice"] = "female-shaonv"
+			}
 			if override, ok := bodyOverrides[key]; ok {
 				body = override
 			}
-			value, callErr := plugin.Engine.CallPath(t.Context(), "protocols", []string{"openai_responses", "decodeRequest"}, map[string]any{
+			value, callErr := plugin.Engine.CallPath(t.Context(), "protocols", []string{protocol, "decodeRequest"}, map[string]any{
 				"model": alias, "upstreamModel": upstreamModel, "stream": false,
 				"body": map[string]any{"kind": "json", "value": body},
 			})

@@ -214,6 +214,7 @@ function formatBreakdownPrice(
     return `${amount}/${taskUsageUnitLabel(field, language, t('unit'))}`
   }
   if (field.unit === 'credit') return `${amount}/${t('credit')}`
+  if (field.unit === 'character') return `${amount}/${t('10K characters')}`
   if (field.unit === 'token' && field.labelKind === 'schema') {
     return `${amount}/${t('1M token')}`
   }

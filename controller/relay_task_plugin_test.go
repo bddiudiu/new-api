@@ -14,11 +14,14 @@ import (
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/dto"
+	"github.com/QuantumNous/new-api/i18n"
 	"github.com/QuantumNous/new-api/model"
 	pluginruntime "github.com/QuantumNous/new-api/pkg/jsplugin"
+	builtinplugins "github.com/QuantumNous/new-api/plugins"
 	"github.com/QuantumNous/new-api/relay"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/service"
+	"github.com/QuantumNous/new-api/setting/config"
 	"github.com/QuantumNous/new-api/types"
 	"github.com/gin-gonic/gin"
 	"github.com/glebarez/sqlite"
@@ -659,4 +662,141 @@ func TestExecuteTaskSubmissionRefundsWhenFinalReserveFails(t *testing.T) {
 	assert.Equal(t, []string{"reserve", "refund"}, events)
 	assert.Equal(t, 1, billing.refunds)
 	assert.False(t, c.Writer.Written())
+}
+
+func TestMiniMaxSpeechSettlementDatabase(t *testing.T) {
+	require.NoError(t, i18n.Init())
+	db, dialect := openTaskDialectDatabase(t, &model.User{}, &model.Channel{}, &model.Task{}, &model.Log{})
+	oldDB, oldLogDB := model.DB, model.LOG_DB
+	oldMain, oldLog := common.MainDatabaseType(), common.LogDatabaseType()
+	oldRedis, oldMemory, oldBatch, oldConsume, oldExport := common.RedisEnabled, common.MemoryCacheEnabled, common.BatchUpdateEnabled, common.LogConsumeEnabled, common.DataExportEnabled
+	model.DB, model.LOG_DB = db, db
+	common.SetDatabaseTypes(dialect, dialect)
+	common.RedisEnabled, common.MemoryCacheEnabled, common.BatchUpdateEnabled, common.LogConsumeEnabled, common.DataExportEnabled = false, false, false, true, false
+	t.Cleanup(func() {
+		model.DB, model.LOG_DB = oldDB, oldLogDB
+		common.SetDatabaseTypes(oldMain, oldLog)
+		common.RedisEnabled, common.MemoryCacheEnabled, common.BatchUpdateEnabled, common.LogConsumeEnabled, common.DataExportEnabled = oldRedis, oldMemory, oldBatch, oldConsume, oldExport
+	})
+	// Keep ordinary model pricing separate from provider-specific character pricing.
+	withTieredBillingConfig(t, map[string]string{}, map[string]string{})
+	require.NoError(t, config.GlobalConfig.LoadFromDB(map[string]string{"billing_setting.plugin_billing_expr": `{"minimax-tts::speech-2.8-turbo":"tier(\"tts\", u(\"characters\") * 0.2 / 10000)"}`}))
+	quotaUpdates := make(chan struct{}, 32)
+	require.NoError(t, db.Callback().Update().After("gorm:update").Register("test:speech-quota", func(tx *gorm.DB) {
+		if tx.Statement.Schema != nil && tx.Statement.Schema.Name == "User" {
+			select {
+			case quotaUpdates <- struct{}{}:
+			default:
+			}
+		}
+	}))
+	source, err := builtinplugins.Source("minimax-tts")
+	require.NoError(t, err)
+	registry := pluginruntime.NewRegistry()
+	plugin, err := registry.RegisterFactory(source, pluginruntime.Options{})
+	require.NoError(t, err)
+	for index, tc := range []struct {
+		name    string
+		actual  any
+		want    float64
+		initial int
+		fail    bool
+	}{
+		{"lower", 3, 3, 10000, false}, {"higher", 9, 9, 10000, false}, {"zero", 0, 0, 10000, false},
+		{"missing", nil, 5, 10000, false}, {"invalid", -1, 5, 10000, false}, {"fraction", 1.5, 5, 10000, false}, {"oversized", 20000, 5, 10000, false},
+		{"cannot reserve increase", 9, 0, 60, true}, {"cannot reserve estimate", 3, 0, 1, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			submissions := 0
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				submissions++
+				var request map[string]any
+				require.NoError(t, common.DecodeJson(r.Body, &request))
+				assert.Equal(t, "你好!", request["text"])
+				assert.Equal(t, "speech-2.8-turbo", request["model"])
+				payload := map[string]any{"base_resp": map[string]any{"status_code": 0}, "data": map[string]any{"status": 2, "audio": "https://cdn.example/speech.mp3"}, "extra_info": map[string]any{"usage_characters": tc.actual, "audio_format": "mp3"}}
+				encoded, err := common.Marshal(payload)
+				require.NoError(t, err)
+				w.Header().Set("Content-Type", "application/json")
+				_, _ = w.Write(encoded)
+			}))
+			defer server.Close()
+			user := model.User{Username: fmt.Sprintf("speech_user_%d", index), AffCode: fmt.Sprintf("speech_aff_%d", index), Quota: tc.initial}
+			require.NoError(t, db.Create(&user).Error)
+			ch := model.Channel{Name: "speech", Type: constant.ChannelTypeTaskPlugin}
+			require.NoError(t, db.Create(&ch).Error)
+			c := taskSubmissionTestContext()
+			c.Request = httptest.NewRequest(http.MethodPost, "/v1/audio/speech", strings.NewReader(`{"model":"speech-2.8-turbo","input":"你好!","voice":"female-shaonv"}`))
+			c.Set("group", "default")
+			c.Set("username", user.Username)
+			c.Set("resolved_task_model", "speech-2.8-turbo")
+			c.Set(pluginruntime.ContextKeyPinnedPlugin, pluginruntime.PinnedPlugin{Generation: registry.Generation(), Plugin: plugin})
+			c.Set(pluginruntime.ContextKeyPinnedEndpoint, pluginruntime.PinnedEndpoint{Generation: registry.Generation(), Plugin: plugin, Protocol: pluginruntime.ProtocolOpenAISpeech, Model: "speech-2.8-turbo"})
+			c.Set(pluginruntime.ContextKeyProtocolRequest, pluginruntime.ProtocolRequestContext{Protocol: pluginruntime.ProtocolOpenAISpeech, Model: "speech-2.8-turbo", RouteRequestContext: pluginruntime.RouteRequestContext{Body: map[string]any{"kind": "json", "value": map[string]any{"input": "你好!", "voice": "female-shaonv"}}}})
+			common.SetContextKey(c, constant.ContextKeyOriginalModel, "speech-2.8-turbo")
+			common.SetContextKey(c, constant.ContextKeyChannelBaseUrl, server.URL)
+			common.SetContextKey(c, constant.ContextKeyChannelId, ch.Id)
+			common.SetContextKey(c, constant.ContextKeyChannelType, ch.Type)
+			info := taskSubmissionRelayInfo(nil)
+			info.UserId = user.Id
+			info.OriginModelName = "speech-2.8-turbo"
+			info.UserGroup = "default"
+			info.UsingGroup = "default"
+			info.IsPlayground = true
+			info.UserSetting.BillingPreference = "wallet_only"
+			info.PublicTaskID = model.GenerateTaskID()
+			info.LockedChannel = &ch
+			outcome, taskErr := executeTaskSubmission(c, info)
+			if tc.fail {
+				require.NotNil(t, taskErr)
+				assert.Nil(t, outcome)
+				var tasks int64
+				require.NoError(t, db.Model(&model.Task{}).Where("user_id = ?", user.Id).Count(&tasks).Error)
+				assert.Zero(t, tasks)
+			} else {
+				require.Nil(t, taskErr)
+				require.NotNil(t, outcome)
+				want := common.QuotaRound(tc.want * 0.2 / 10000 * common.QuotaPerUnit)
+				assert.Equal(t, want, outcome.Task.Quota)
+				var stored model.Task
+				require.NoError(t, db.Where("task_id = ?", info.PublicTaskID).First(&stored).Error)
+				assert.True(t, stored.ResultRetrievable())
+				assert.Equal(t, model.TaskStatus(model.TaskStatusSuccess), stored.Status)
+				assert.Equal(t, tc.want, stored.PrivateData.BillingContext.TieredSnapshot.UsageFacts["characters"])
+				assert.NotContains(t, string(stored.Data), "你好")
+				var logs []model.Log
+				require.NoError(t, db.Where("user_id = ?", user.Id).Find(&logs).Error)
+				require.Len(t, logs, 1)
+				assert.Equal(t, want, logs[0].Quota)
+				var other map[string]any
+				require.NoError(t, common.UnmarshalJsonStr(logs[0].Other, &other))
+				assert.Equal(t, tc.want, other["usage_facts"].(map[string]any)["characters"])
+				require.NoError(t, info.Billing.Settle(want))
+				info.Billing.Refund(c)
+			}
+			var updated model.User
+			wantBalance := tc.initial - common.QuotaRound(tc.want*0.2/10000*common.QuotaPerUnit)
+			// Refund is asynchronous. Wait on actual wallet update notifications,
+			// never on a sleep or a guessed processing delay.
+			waitContext, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+			defer cancel()
+			for {
+				require.NoError(t, db.First(&updated, user.Id).Error)
+				if updated.Quota == wantBalance {
+					break
+				}
+				select {
+				case <-quotaUpdates:
+				case <-waitContext.Done():
+					t.Fatalf("wallet balance: got %d, want %d", updated.Quota, wantBalance)
+				}
+			}
+			assert.Equal(t, wantBalance, updated.Quota)
+			if tc.initial == 1 {
+				assert.Zero(t, submissions)
+			} else {
+				assert.Equal(t, 1, submissions)
+			}
+		})
+	}
 }

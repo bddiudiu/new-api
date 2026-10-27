@@ -435,8 +435,8 @@ func RelayTaskPluginEndpoint(c *gin.Context, fallback gin.HandlerFunc) {
 	switch pinned.Protocol {
 	case "openai_responses":
 		serveTaskPluginProtocol(c, pinned, defaultPluginProtocolBridgeDeps())
-	case pluginruntime.ProtocolOpenAIImage:
-		serveTaskPluginImageProtocol(c, pinned, defaultPluginProtocolBridgeDeps())
+	case pluginruntime.ProtocolOpenAIImage, pluginruntime.ProtocolOpenAISpeech:
+		serveTaskPluginMediaProtocol(c, pinned, defaultPluginProtocolBridgeDeps())
 	default:
 		fallback(c)
 	}
@@ -636,7 +636,15 @@ func executeTaskSubmissionWith(
 	if relayInfo.Billing != nil {
 		stage = "reserve"
 		diagnostics.reserve("reserve_start", result.Quota)
-		if reserveErr := relayInfo.Billing.Reserve(result.Quota); reserveErr != nil {
+		reserve := relayInfo.Billing.Reserve
+		if value, exists := c.Get(pluginruntime.ContextKeyPinnedEndpoint); exists {
+			if endpoint, ok := value.(pluginruntime.PinnedEndpoint); ok && endpoint.Protocol == pluginruntime.ProtocolOpenAISpeech {
+				// Speech must cover the final character cost before the durable
+				// result is delivered. Reuse the atomic, debt-free reservation.
+				reserve = relayInfo.Billing.ReserveBeforeSubmit
+			}
+		}
+		if reserveErr := reserve(result.Quota); reserveErr != nil {
 			common.SysError(common.LogText("reserve adjusted task billing error: %s", reserveErr.Error()))
 			taskErr = service.TaskErrorWrapperLocal(errors.New("insufficient quota for adjusted task cost"), string(types.ErrorCodeInsufficientUserQuota), http.StatusForbidden)
 			diagnostics.failed("reserve", "insufficient_quota", taskErr, false)

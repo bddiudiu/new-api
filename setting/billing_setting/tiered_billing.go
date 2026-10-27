@@ -290,6 +290,9 @@ func taskUsageSmokeVectors(schema map[string]jsplugin.UsageFieldSchema) []map[st
 		if field.Unit == "count" {
 			limit = dto.MaxImageN
 		}
+		if field.Unit == "character" {
+			limit = relaycommon.MaxTaskCharacters
+		}
 		if field.Unit == "token" || field.Unit == "credit" {
 			limit = common.MaxQuota
 		}

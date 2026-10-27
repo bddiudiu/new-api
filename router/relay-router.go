@@ -143,9 +143,8 @@ func SetRelayRouter(router *gin.Engine) {
 		httpRouter.POST("/audio/translations", func(c *gin.Context) {
 			controller.Relay(c, types.RelayFormatOpenAIAudio)
 		})
-		httpRouter.POST("/audio/speech", func(c *gin.Context) {
-			controller.Relay(c, types.RelayFormatOpenAIAudio)
-		})
+		// /audio/speech is registered by SetTaskPluginProtocolRouter with
+		// the same audio relay fallback for ordinary channels.
 
 		// rerank related routes
 		httpRouter.POST("/rerank", func(c *gin.Context) {

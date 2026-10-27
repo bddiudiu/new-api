@@ -1690,7 +1690,7 @@ func TestServeTaskPluginImageProtocolRendersImmediateResultAndInlinesBase64(t *t
 			deps.submit = func(_ *gin.Context, info *relaycommon.RelayInfo) (*taskSubmissionOutcome, *dto.TaskError) {
 				return imageProtocolTestOutcome(info, model.TaskStatusSuccess, "https://cdn.example/1.png", "https://cdn.example/2.png"), nil
 			}
-			serveTaskPluginImageProtocol(c, pinned, deps)
+			serveTaskPluginMediaProtocol(c, pinned, deps)
 			require.Equal(t, http.StatusOK, recorder.Code, recorder.Body.String())
 			var response map[string]any
 			require.NoError(t, common.Unmarshal(recorder.Body.Bytes(), &response))
@@ -1752,7 +1752,7 @@ func TestServeTaskPluginImageProtocolWaitsForAsynchronousTask(t *testing.T) {
 			deps.submit = func(_ *gin.Context, info *relaycommon.RelayInfo) (*taskSubmissionOutcome, *dto.TaskError) {
 				return imageProtocolTestOutcome(info, model.TaskStatusSubmitted), nil
 			}
-			serveTaskPluginImageProtocol(c, pinned, deps)
+			serveTaskPluginMediaProtocol(c, pinned, deps)
 			require.Equal(t, tc.wantStatus, recorder.Code, recorder.Body.String())
 			var response map[string]any
 			require.NoError(t, common.Unmarshal(recorder.Body.Bytes(), &response))
@@ -1778,7 +1778,7 @@ func TestServeTaskPluginImageProtocolSubmissionErrorUsesOpenAIEnvelope(t *testin
 	deps.submit = func(*gin.Context, *relaycommon.RelayInfo) (*taskSubmissionOutcome, *dto.TaskError) {
 		return nil, service.TaskErrorWrapper(errors.New(`{"code":"InvalidParameter","message":"n must be 1","request_id":"r"}`), "fail_to_fetch_task", http.StatusBadRequest)
 	}
-	serveTaskPluginImageProtocol(c, pinned, deps)
+	serveTaskPluginMediaProtocol(c, pinned, deps)
 	require.Equal(t, http.StatusBadRequest, recorder.Code)
 	var response map[string]any
 	require.NoError(t, common.Unmarshal(recorder.Body.Bytes(), &response))
@@ -1841,7 +1841,7 @@ func TestServeTaskPluginImageProtocolDisconnectDuringSubmissionKeepsDurableSettl
 
 	go func() {
 		defer close(done)
-		serveTaskPluginImageProtocol(c, pinned, deps)
+		serveTaskPluginMediaProtocol(c, pinned, deps)
 	}()
 	select {
 	case <-submitStarted:

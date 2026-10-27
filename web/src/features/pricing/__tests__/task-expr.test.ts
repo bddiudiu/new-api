@@ -18,7 +18,7 @@ For commercial licensing, please contact support@quantumnous.com
 */
 import assert from 'node:assert/strict'
 
-import { describe, test } from 'vitest'
+import { describe, expect, test } from 'vitest'
 
 import {
   combineBillingExpr,
@@ -400,4 +400,29 @@ describe('task visual pricing preview', () => {
       []
     )
   })
+})
+
+test('character prices round-trip per 10K while usage and zero stay unscaled', () => {
+  const schema: BillingUsageSchema = {
+    characters: { type: 'number', unit: 'character' },
+  }
+  const expression = 'tier("tts", u("characters") * 0.3 / 10000)'
+  const config = tryParseTaskVisualConfig(expression, schema)
+  assert.ok(config)
+  expect(generateTaskExprFromConfig(config, schema)).toBe(expression)
+  expect(
+    evaluateTaskVisualConfig(config, { characters: 5000 }, schema)?.total
+  ).toBeCloseTo(0.15)
+  expect(
+    evaluateTaskVisualConfig(config, { characters: 0 }, schema)?.total
+  ).toBe(0)
+  expect(
+    tryParseTaskVisualConfig(
+      'tier("tts", u("characters") * 0.3 / 1000000)',
+      schema
+    )
+  ).toBeNull()
+  expect(
+    tryParseTaskVisualConfig('tier("tts", u("characters") * 0.3)', schema)
+  ).toBeNull()
 })

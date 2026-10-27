@@ -21,13 +21,13 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-// serveTaskPluginImageProtocol answers an OpenAI Images API request that a
-// task plugin claimed. The API is synchronous: the durable submission runs
+// serveTaskPluginMediaProtocol answers a synchronous image or speech request
+// claimed by a task plugin. The durable submission runs
 // first on a context that survives a client disconnect, an asynchronous
 // upstream task is then polled inside the request until it is terminal or the
-// protocol timeout elapses, and the plugin's render hook finally shapes the
-// OpenAI image response from the terminal task.
-func serveTaskPluginImageProtocol(c *gin.Context, pinned pluginruntime.PinnedEndpoint, deps pluginProtocolBridgeDeps) {
+// protocol timeout elapses, and the plugin's render hook supplies the image
+// response or selects the audio artifact from the terminal task.
+func serveTaskPluginMediaProtocol(c *gin.Context, pinned pluginruntime.PinnedEndpoint, deps pluginProtocolBridgeDeps) {
 	deps = deps.withDefaults()
 	requestValue, exists := c.Get(pluginruntime.ContextKeyProtocolRequest)
 	protocolRequest, ok := requestValue.(pluginruntime.ProtocolRequestContext)
@@ -94,6 +94,9 @@ func serveTaskPluginImageProtocol(c *gin.Context, pinned pluginruntime.PinnedEnd
 		return
 	}
 	task := outcome.Task
+	if pinned.Protocol == pluginruntime.ProtocolOpenAISpeech {
+		c.Header("X-New-API-Task-ID", task.TaskID)
+	}
 	if task.Status != model.TaskStatusSuccess && task.Status != model.TaskStatusFailure {
 		if taskErr = waitTaskPluginImageTask(c, task, deps); taskErr != nil {
 			if c.Request.Context().Err() == nil {
@@ -103,12 +106,19 @@ func serveTaskPluginImageProtocol(c *gin.Context, pinned pluginruntime.PinnedEnd
 		}
 	}
 	if task.Status == model.TaskStatusFailure {
+		code := "image_generation_failed"
+		if pinned.Protocol == pluginruntime.ProtocolOpenAISpeech {
+			code = "speech_synthesis_failed"
+		}
 		reason := strings.TrimSpace(task.FailReason)
 		if reason == "" {
 			reason = "image generation failed"
+			if pinned.Protocol == pluginruntime.ProtocolOpenAISpeech {
+				reason = "speech synthesis failed"
+			}
 		}
 		// The fail reason comes from the upstream, so mask the channel address in it.
-		taskErr = service.TaskErrorWrapper(errors.New(reason), "image_generation_failed", http.StatusBadRequest, common.UpstreamAddresses(c)...)
+		taskErr = service.TaskErrorWrapper(errors.New(reason), code, http.StatusBadRequest, common.UpstreamAddresses(c)...)
 		taskErr.LocalError = true
 		respondTaskPluginImageError(c, taskErr)
 		return
@@ -132,6 +142,10 @@ func serveTaskPluginImageProtocol(c *gin.Context, pinned pluginruntime.PinnedEnd
 		return
 	}
 	response, ok := payload.(map[string]any)
+	if pinned.Protocol == pluginruntime.ProtocolOpenAISpeech {
+		serveTaskPluginSpeechContent(c, pinned, task, response, outcome.RelayInfo)
+		return
+	}
 	data, hasData := response["data"].([]any)
 	if !ok || !hasData {
 		logger.LogError(c, common.LogText("task protocol image render hook must return an object with a data array"))
