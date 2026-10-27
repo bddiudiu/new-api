@@ -5,7 +5,7 @@ export const meta = {
   key: "minimax-tts",
   name: "MiniMax TTS",
   icon: "Minimax.Color",
-  version: "1.0.0",
+  version: "1.0.2",
   author: { name: "QuantumNous" },
   description: { en: "MiniMax speech synthesis with character billing", zh: "MiniMax 按字符计费的语音合成" },
   baseUrl: "https://api.minimax.cn",
@@ -84,7 +84,8 @@ export function buildSubmitRequest(ctx) {
   return {
     url: ctx.baseUrl.replace(/\/+$/, "") + "/v1/t2a_v2",
     method: "POST",
-    headers: { "Content-Type": "application/json", Authorization: ctx.authHeader || "Bearer " + ctx.apiKey },
+    // For api_key auth the host's authHeader is the raw key, not a Bearer header.
+    headers: { "Content-Type": "application/json", Authorization: "Bearer " + ctx.apiKey },
     body: {
       model: model,
       text: body.input,
@@ -103,7 +104,49 @@ export function extractUsage(ctx) {
 
 export function parseSubmitResponse(ctx, response) {
   const body = response.body;
-  if (!body || !body.base_resp || body.base_resp.status_code !== 0) throw new Error("MiniMax speech synthesis failed");
+  if (!body || typeof body !== "object" || Array.isArray(body)) {
+    throw new Error("MiniMax returned an invalid JSON response; check the channel Base URL");
+  }
+  const base = body.base_resp;
+  if (!base || typeof base !== "object" || Array.isArray(base)) {
+    throw new Error("MiniMax response is missing base_resp; the channel must use the MiniMax /v1/t2a_v2 API");
+  }
+  const code = base.status_code;
+  if (!Number.isSafeInteger(code) || code < 0) throw new Error("MiniMax returned an invalid base_resp.status_code");
+  if (code !== 0) {
+    // Hook errors reach API callers. Do not copy arbitrary status_msg, trace_id
+    // or response bodies, which can echo credentials, input text or signed URLs.
+    // https://platform.minimax.cn/docs/api-reference/errorcode
+    const reasons = {
+      1000: "Unknown upstream error",
+      1001: "Request timed out",
+      1002: "Rate limit exceeded",
+      1004: "Authentication failed; check the channel API key and MiniMax API region",
+      1008: "Insufficient MiniMax account balance",
+      1024: "Internal upstream error",
+      1026: "Input rejected by content moderation",
+      1027: "Output rejected by content moderation",
+      1033: "Upstream service error",
+      1042: "Too many invisible or invalid input characters",
+      1045: "Task concurrency limit exceeded",
+      2013: "Invalid request parameters",
+      20132: "Invalid voice_id or voice sample",
+      2014: "Empty input",
+      2022: "Model unavailable or access denied",
+      2042: "Access to voice_id denied",
+      2043: "The model does not support this voice_id",
+      2049: "Invalid MiniMax API key",
+      2053: "Insufficient MiniMax credits",
+      2054: "voice_id does not exist",
+      2061: "The current plan does not support this model",
+      2064: "Upstream service is busy",
+      2066: "Request processing timed out",
+      2067: "Plan quota exhausted and automatic credit consumption is disabled",
+      2068: "The current plan tier does not support this model",
+      2069: "The model has been retired",
+    };
+    throw new Error("MiniMax speech synthesis failed (status_code=" + code + "): " + (reasons[code] || "See the MiniMax error code documentation"));
+  }
   const data = body.data;
   const extra = body.extra_info || {};
   if (!data || data.status !== 2 || typeof data.audio !== "string" || !/^https:\/\/[^\s]+$/.test(data.audio) || data.audio.length > 65536) {

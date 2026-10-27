@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/pkg/jsplugin"
 	builtinplugins "github.com/QuantumNous/new-api/plugins"
@@ -121,20 +122,76 @@ func TestMiniMaxSpeechMappedRequestAndCompletedUsage(t *testing.T) {
 	}
 }
 
+func TestMiniMaxSpeechSendsBearerChannelKey(t *testing.T) {
+	plugin := miniMaxSpeechPlugin(t)
+	info := &relaycommon.RelayInfo{
+		ChannelMeta: &relaycommon.ChannelMeta{
+			ChannelType:       constant.ChannelTypeTaskPlugin,
+			ChannelBaseUrl:    "https://api.minimax.cn",
+			ApiKey:            "minimax-channel-key",
+			UpstreamModelName: "speech-2.8-turbo",
+		},
+		OriginModelName: "speech-2.8-turbo",
+		TaskRelayInfo:   &relaycommon.TaskRelayInfo{PublicTaskID: "task_speech"},
+	}
+	c, _ := gin.CreateTestContext(httptest.NewRecorder())
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/audio/speech", nil)
+	c.Request.Header.Set("Authorization", "Bearer client-gateway-token")
+	c.Set("task_request", map[string]any{"input": "你好", "voice": "male-qn-qingse"})
+	adaptor := taskplugin.New(plugin)
+	adaptor.Init(info)
+	// Exercise the host credential context: api_key authHeader is the raw key.
+	body, err := adaptor.BuildRequestBody(c, info)
+	require.NoError(t, err)
+	url, err := adaptor.BuildRequestURL(info)
+	require.NoError(t, err)
+	request := httptest.NewRequest(http.MethodPost, url, body)
+	require.NoError(t, adaptor.BuildRequestHeader(c, request, info))
+	assert.Equal(t, "Bearer minimax-channel-key", request.Header.Get("Authorization"))
+	assert.Equal(t, "https", request.URL.Scheme)
+	assert.Empty(t, request.URL.RawQuery)
+	assert.Nil(t, request.URL.User)
+	encoded, err := io.ReadAll(request.Body)
+	require.NoError(t, err)
+	assert.NotContains(t, string(encoded), "minimax-channel-key")
+	assert.NotContains(t, string(encoded), "client-gateway-token")
+}
+
 func TestMiniMaxSpeechMalformedSuccessNeverRetries(t *testing.T) {
 	plugin := miniMaxSpeechPlugin(t)
-	for _, body := range []string{`{broken`, `{"base_resp":{"status_code":1000}}`, `{"base_resp":{"status_code":0},"data":null}`} {
-		c, _ := gin.CreateTestContext(httptest.NewRecorder())
-		c.Request = httptest.NewRequest(http.MethodPost, "/v1/audio/speech", nil)
-		c.Set(jsplugin.ContextKeyPinnedEndpoint, jsplugin.PinnedEndpoint{Protocol: jsplugin.ProtocolOpenAISpeech, Plugin: plugin})
-		info := &relaycommon.RelayInfo{ChannelMeta: &relaycommon.ChannelMeta{}, TaskRelayInfo: &relaycommon.TaskRelayInfo{}}
-		adaptor := taskplugin.New(plugin)
-		adaptor.Init(info)
-		response := &http.Response{StatusCode: 200, Header: http.Header{"Content-Type": {"application/json"}}, Body: io.NopCloser(strings.NewReader(body))}
-		parsed, taskErr := adaptor.ParseResponse(c, response, info)
-		require.Nil(t, parsed)
-		require.NotNil(t, taskErr)
-		assert.True(t, taskErr.NoRetry)
+	for _, tc := range []struct {
+		name, body, message string
+	}{
+		{"malformed JSON", `{broken`, "invalid JSON response; check the channel Base URL"},
+		{"unexpected envelope", `{"error":{"message":"private-upstream-detail"}}`, "response is missing base_resp"},
+		{"invalid envelope", `{"base_resp":[]}`, "response is missing base_resp"},
+		{"missing status", `{"base_resp":{}}`, "invalid base_resp.status_code"},
+		{"string status", `{"base_resp":{"status_code":"0"}}`, "invalid base_resp.status_code"},
+		{"fractional status", `{"base_resp":{"status_code":1004.5}}`, "invalid base_resp.status_code"},
+		{"authentication", `{"base_resp":{"status_code":1004,"status_msg":"Bearer private-api-key https://cdn.example/private-audio?signature=private-signature\nprivate-upstream-detail"},"trace_id":"private-trace"}`, "status_code=1004): Authentication failed"},
+		{"balance", `{"base_resp":{"status_code":1008}}`, "status_code=1008): Insufficient MiniMax account balance"},
+		{"voice", `{"base_resp":{"status_code":2043}}`, "status_code=2043): The model does not support this voice_id"},
+		{"unknown status", `{"base_resp":{"status_code":9876,"status_msg":"private-upstream-detail"}}`, "status_code=9876): See the MiniMax error code documentation"},
+		{"missing audio", `{"base_resp":{"status_code":0},"data":null}`, "MiniMax returned no completed audio URL"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			c, _ := gin.CreateTestContext(httptest.NewRecorder())
+			c.Request = httptest.NewRequest(http.MethodPost, "/v1/audio/speech", nil)
+			c.Set(jsplugin.ContextKeyPinnedEndpoint, jsplugin.PinnedEndpoint{Protocol: jsplugin.ProtocolOpenAISpeech, Plugin: plugin})
+			info := &relaycommon.RelayInfo{ChannelMeta: &relaycommon.ChannelMeta{}, TaskRelayInfo: &relaycommon.TaskRelayInfo{}}
+			adaptor := taskplugin.New(plugin)
+			adaptor.Init(info)
+			response := &http.Response{StatusCode: 200, Header: http.Header{"Content-Type": {"application/json"}}, Body: io.NopCloser(strings.NewReader(tc.body))}
+			parsed, taskErr := adaptor.ParseResponse(c, response, info)
+			require.Nil(t, parsed)
+			require.NotNil(t, taskErr)
+			assert.Equal(t, "plugin_submit_response_failed", taskErr.Code)
+			assert.Equal(t, http.StatusBadGateway, taskErr.StatusCode)
+			assert.Contains(t, taskErr.Message, tc.message)
+			assert.NotContains(t, taskErr.Message, "private-")
+			assert.NotContains(t, taskErr.Error.Error(), "private-")
+			assert.True(t, taskErr.NoRetry)
+		})
 	}
 	// The compact result remains a normal audio task, never an image result.
 	artifacts, err := taskplugin.New(plugin).ListArtifacts(&model.Task{Status: model.TaskStatusSuccess, Data: []byte(`{"audio_url":"https://cdn.example/speech.mp3"}`)})
