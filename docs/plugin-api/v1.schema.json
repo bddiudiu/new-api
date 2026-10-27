@@ -26,6 +26,12 @@
   },
   "allOf": [{"if": {"required": ["requiredCapabilities"], "properties": {"requiredCapabilities": {"contains": {"const": "submit-sse-delta@1"}}}}, "then": {"required": ["submitResponseTypes"], "properties": {"submitResponseTypes": {"contains": {"const": "sse"}}}}}],
   "$defs": {
+    "contentRefreshRequest": {
+      "type": "object", "additionalProperties": false,
+      "required": ["refreshTask"],
+      "properties": {"refreshTask": {"const": true}},
+      "description": "buildContentRequest only: re-query a successful task once for a fresh artifact URL, without submission, settlement or persistence."
+    },
     "jsonChange": {
       "type": "object", "additionalProperties": false, "required": ["op", "path", "value"],
       "properties": {

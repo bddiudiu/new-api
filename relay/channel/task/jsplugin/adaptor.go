@@ -36,6 +36,7 @@ import (
 )
 
 type requestDescriptor struct {
+	RefreshTask    bool              `json:"refreshTask"`
 	ResponseType   string            `json:"responseType"`
 	URL            string            `json:"url"`
 	Method         string            `json:"method"`
@@ -56,6 +57,7 @@ type requestDescriptor struct {
 // JSON order returns it: decoded from the JSON.stringify text of the result,
 // with the body kept as that text.
 type orderedRequestDescriptor struct {
+	RefreshTask    bool              `json:"refreshTask"`
 	ResponseType   string            `json:"responseType"`
 	URL            string            `json:"url"`
 	Method         string            `json:"method"`
@@ -93,6 +95,7 @@ type taskResult struct {
 	CompletionTokens float64 `json:"completionTokens"`
 	TotalTokens      float64 `json:"totalTokens"`
 	State            any     `json:"state"`
+	TaskData         any     `json:"taskData"`
 }
 
 var taskArtifactKeyPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._~-]{0,127}$`)
@@ -113,6 +116,8 @@ type TaskAdaptor struct {
 	routeRequest   *pluginruntime.RouteRequestContext
 	requestHeaders map[string]string
 	files          []map[string]any
+	audioProbeURL  string
+	audioSeconds   float64
 	// hookRequestBody is hookRequestSource as hooks receive it.
 	hookRequestSource map[string]any
 	hookRequestBody   any
@@ -216,7 +221,7 @@ func (a *TaskAdaptor) ExtractUsageFactsValidated(c *gin.Context, info *relaycomm
 	}
 	usageContext := a.submitContext(c, info)
 	usageContext["usagePurpose"] = "facts"
-	value, err := a.plugin.Engine.Call(c.Request.Context(), "extractUsage", usageContext)
+	value, err := a.plugin.Engine.Call(pluginruntime.WithAudioDurationProbe(c.Request.Context(), a.probeAudioDuration), "extractUsage", usageContext)
 	if err != nil {
 		return nil, fmt.Errorf("plugin usage hook failed")
 	}
@@ -520,9 +525,9 @@ func (a *TaskAdaptor) ParseResponse(c *gin.Context, resp *http.Response, info *r
 	pinnedValue, _ := c.Get(pluginruntime.ContextKeyPinnedEndpoint)
 	pinned, _ := pinnedValue.(pluginruntime.PinnedEndpoint)
 	defer func() {
-		// A synchronous speech response may already represent billable work,
-		// even when its JSON is damaged or the provider rejects the content.
-		if taskErr != nil && (acceptedStream || pinned.Protocol == pluginruntime.ProtocolOpenAISpeech) {
+		// Speech plugins also expose native ASR/TTS routes. A successful HTTP
+		// response can already have started billable work on those surfaces.
+		if taskErr != nil && (acceptedStream || pinned.Protocol == pluginruntime.ProtocolOpenAISpeech || a.plugin.Meta.ProtocolSupports(pluginruntime.ProtocolOpenAISpeech, "sync")) {
 			taskErr.NoRetry = true
 		}
 	}()
@@ -725,6 +730,10 @@ func (a *TaskAdaptor) hookFetcher(baseURL, proxy string) pluginruntime.Fetcher {
 }
 
 func (a *TaskAdaptor) doFetchDescriptor(baseURL, key, proxy string, descriptor requestDescriptor) (*http.Response, error) {
+	return a.doFetchDescriptorContext(context.Background(), baseURL, key, proxy, descriptor)
+}
+
+func (a *TaskAdaptor) doFetchDescriptorContext(ctx context.Context, baseURL, key, proxy string, descriptor requestDescriptor) (*http.Response, error) {
 	if err := pluginruntime.ValidateRequestURL(descriptor.URL, baseURL, a.plugin.Meta.AllowedHosts); err != nil {
 		return nil, err
 	}
@@ -746,7 +755,7 @@ func (a *TaskAdaptor) doFetchDescriptor(baseURL, key, proxy string, descriptor r
 	if method == "" {
 		method = http.MethodGet
 	}
-	req, err := http.NewRequest(method, descriptor.URL, requestBody)
+	req, err := http.NewRequestWithContext(ctx, method, descriptor.URL, requestBody)
 	if err != nil {
 		return nil, err
 	}
@@ -975,6 +984,15 @@ func (a *TaskAdaptor) ParseTaskResult(task *model.Task, resp *http.Response, bod
 		CompletionTokens: positiveInt(parsed.CompletionTokens),
 		TotalTokens:      positiveInt(parsed.TotalTokens),
 	}
+	if returned, ok := value.(map[string]any); ok {
+		if data, present := returned["taskData"]; present {
+			encoded, encodeErr := common.Marshal(data)
+			if encodeErr != nil || len(encoded) > maxTaskPluginPersistedJSONBytes {
+				return nil, fmt.Errorf("plugin returned invalid or oversized task data")
+			}
+			result.PluginTaskData = encoded
+		}
+	}
 	if pluginState, present := encodeReturnedPluginState(value); present {
 		if len(pluginState) > maxTaskPluginPersistedJSONBytes {
 			logger.LogWarn(context.Background(), common.LogText("task plugin %s rejected oversized poll state (%d bytes)", a.plugin.Meta.Key, len(pluginState)))
@@ -1108,13 +1126,60 @@ func (a *TaskAdaptor) BuildContentRequest(ctx context.Context, task *model.Task,
 	hookContext["artifactKey"] = artifactKey
 	hookContext["baseUrl"] = a.info.ChannelBaseUrl
 	hookContext["clientRequest"] = jsonValue(clientRequest)
-	if err = a.applyUpstreamCredentials(hookContext, a.info.ChannelType, a.info.ApiKey, a.info.ChannelSetting.Proxy); err != nil {
+	key := a.info.ApiKey
+	if task.PrivateData.Key != "" {
+		key = task.PrivateData.Key
+	}
+	if err = a.applyUpstreamCredentials(hookContext, a.info.ChannelType, key, a.info.ChannelSetting.Proxy); err != nil {
 		return nil, err
 	}
 	fetchContext := pluginruntime.WithFetcher(ctx, a.hookFetcher(a.info.ChannelBaseUrl, a.info.ChannelSetting.Proxy))
 	descriptor, err := a.requestDescriptor(fetchContext, "buildContentRequest", hookContext)
 	if err != nil {
 		return nil, err
+	}
+	if descriptor.RefreshTask {
+		if task.Status != model.TaskStatusSuccess || descriptor.URL != "" || descriptor.Body != nil || len(descriptor.Headers) != 0 {
+			return nil, fmt.Errorf("content refresh requires a successful task and a refresh-only descriptor")
+		}
+		// Read this task through its existing query hook, never a second submit.
+		// Refresh is request-local: it cannot update status, settle or refund.
+		refreshContext, cancel := context.WithTimeout(ctx, 30*time.Second)
+		defer cancel()
+		refreshContext = pluginruntime.WithFetcher(refreshContext, a.hookFetcher(a.info.ChannelBaseUrl, a.info.ChannelSetting.Proxy))
+		queryContext, queryErr := a.queryContext(task, key, a.info.ChannelBaseUrl, a.info.ChannelSetting.Proxy)
+		if queryErr != nil {
+			return nil, fmt.Errorf("could not prepare artifact refresh")
+		}
+		queryDescriptor, queryErr := a.requestDescriptor(refreshContext, "buildQueryRequest", queryContext)
+		if queryErr != nil {
+			return nil, fmt.Errorf("could not build artifact refresh query")
+		}
+		response, queryErr := a.doFetchDescriptorContext(refreshContext, a.info.ChannelBaseUrl, key, a.info.ChannelSetting.Proxy, queryDescriptor)
+		if queryErr != nil {
+			return nil, fmt.Errorf("artifact refresh query failed")
+		}
+		defer response.Body.Close()
+		body, readErr := io.ReadAll(io.LimitReader(response.Body, maxTaskPluginPersistedJSONBytes+1))
+		if readErr != nil || response.StatusCode < 200 || response.StatusCode >= 300 || len(body) > maxTaskPluginPersistedJSONBytes {
+			return nil, fmt.Errorf("artifact refresh returned an invalid response")
+		}
+		var refreshed any
+		if common.Unmarshal(body, &refreshed) != nil {
+			return nil, fmt.Errorf("artifact refresh returned invalid JSON")
+		}
+		parsed, queryErr := a.plugin.Engine.Call(refreshContext, "parseTaskResult", queryContext, refreshed, hookHTTPResponse(response))
+		var result taskResult
+		if queryErr != nil || convert(parsed, &result) != nil || result.Status != string(model.TaskStatusSuccess) {
+			return nil, fmt.Errorf("refreshed artifact is unavailable")
+		}
+		// The previous hook received this map as read-only host data.
+		hookContext = maps.Clone(hookContext)
+		hookContext["data"], hookContext["contentRefreshed"] = refreshed, true
+		descriptor, err = a.requestDescriptor(refreshContext, "buildContentRequest", hookContext)
+		if err != nil || descriptor.RefreshTask {
+			return nil, fmt.Errorf("artifact refresh did not resolve content")
+		}
 	}
 	method := strings.ToUpper(strings.TrimSpace(descriptor.Method))
 	if method == "" {
@@ -1156,7 +1221,7 @@ func (a *TaskAdaptor) BuildContentRequest(ctx context.Context, task *model.Task,
 	headers := descriptor.Headers
 	if !descriptor.Credentialless {
 		var overrides map[string]string
-		if overrides, err = channel.ResolveHeaderOverride(a.headerOverrideInfo(a.info.ApiKey), nil); err != nil {
+		if overrides, err = channel.ResolveHeaderOverride(a.headerOverrideInfo(key), nil); err != nil {
 			return nil, err
 		}
 		if len(overrides) > 0 {
@@ -1426,6 +1491,7 @@ func (a *TaskAdaptor) requestDescriptor(ctx context.Context, hook string, args .
 		return requestDescriptor{}, err
 	}
 	descriptor := requestDescriptor{
+		RefreshTask:  ordered.RefreshTask,
 		ResponseType: ordered.ResponseType, URL: ordered.URL, Method: ordered.Method, Headers: ordered.Headers,
 		Credentialless: ordered.Credentialless, Action: ordered.Action, Model: ordered.Model,
 		RewriteModel: ordered.RewriteModel, BodyType: ordered.BodyType, Parts: ordered.Parts,
@@ -1456,6 +1522,7 @@ func (a *TaskAdaptor) buildSubmit(c *gin.Context, info *relaycommon.RelayInfo) (
 	if info.HasChannelMeta() {
 		fetchContext = pluginruntime.WithFetcher(fetchContext, a.hookFetcher(info.ChannelBaseUrl, info.ChannelSetting.Proxy))
 	}
+	fetchContext = pluginruntime.WithAudioDurationProbe(fetchContext, a.probeAudioDuration)
 	descriptor, err := a.requestDescriptor(fetchContext, "buildSubmitRequest", a.submitContext(c, info))
 	if err != nil {
 		reason := "hook_failed"

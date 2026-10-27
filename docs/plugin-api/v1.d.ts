@@ -20,6 +20,8 @@ export interface HostUtils {
   volcSignV4(request: {method: string; url: string; headers?: Record<string, string>; body?: string; accessKey: string; secretKey: string; region?: string; service?: string; timestamp?: number}): Record<string, string>;
   /** Synchronous read-only request from driver hooks to the channel Base URL host or allowedHosts. At most 4 per hook call, 15 s each, 30 s in total, 1 MiB per body; redirects are returned, not followed. */
   fetch(request: FetchRequest): FetchResponse;
+  /** Credentialless public audio probe in buildSubmitRequest/extractUsage only. One URL per hook, 30 s, at most 64 MiB and 3600 seconds. Cached per submission; no file bytes are exposed. */
+  audioDuration(url: string): number;
 }
 export interface FetchRequest {url: string; method?: "GET" | "HEAD"; headers?: Record<string, string>; responseType?: "json" | "bytes"}
 /** headers holds the first value of each header under its canonical name; body is parsed JSON when the response parses, otherwise text, and "" for HEAD; with responseType "bytes" it is an ArrayBuffer of the response bytes. */
@@ -67,8 +69,10 @@ export interface TaskQueryContext {taskId: string; publicTaskId: string; action:
 export interface BatchQueryContext {baseUrl: string; apiKey?: string; authHeader: string; auth?: unknown; upstream: UpstreamContext; tasks: readonly TaskQueryContext[]}
 export type HookHTTPResponse = {readonly status: number; readonly headers: Readonly<Record<string, string>>}
 export interface RequestDescriptor {responseType?: "json" | "sse"; url: string; method?: string; headers?: Record<string, string>; /** JSON body may contain FilePlaceholder objects at any depth; the host replaces each with a Base64 or data-URL string. */ body?: unknown; credentialless?: boolean; action?: string; model?: string; rewriteModel?: string; bodyType?: "json" | "multipart"; parts?: readonly {name: string; value?: unknown; fileRef?: string; filename?: string}[]}
+/** A successful task may be re-queried once for an expired artifact URL, without settlement or persistence. */
+export type ContentRequestDescriptor = RequestDescriptor | {refreshTask: true};
 export interface UpstreamResponse {statusCode: number; headers: Readonly<Record<string, readonly string[]>>; body: unknown}
-export interface NormalizedTaskResult {taskId?: string; status: "NOT_START" | "SUBMITTED" | "QUEUED" | "IN_PROGRESS" | "SUCCESS" | "FAILURE" | "UNKNOWN"; progress?: string; reason?: string; url?: string; remoteUrl?: string; completionTokens?: number; totalTokens?: number}
+export interface NormalizedTaskResult {/** Optional compact single-task polling snapshot; omitted preserves raw upstream data. */ taskData?: JSONValue; taskId?: string; status: "NOT_START" | "SUBMITTED" | "QUEUED" | "IN_PROGRESS" | "SUCCESS" | "FAILURE" | "UNKNOWN"; progress?: string; reason?: string; url?: string; remoteUrl?: string; completionTokens?: number; totalTokens?: number}
 export interface TaskArtifact {key: string; type: "video" | "audio" | "image" | "file"; mimeType?: string}
 export declare const meta: Meta;
 export declare const native: Record<string, ((ctx: NativeDecodeContext) => TaskIntent) | ((ctx: NativeDecodeContext, task: TaskView | readonly TaskView[]) => unknown)> & {error?: (ctx: NativeDecodeContext, error: {code: string; message: string; httpStatus: number; retryable: boolean}) => unknown};
@@ -99,4 +103,4 @@ export declare function extractUsage(ctx: DriverContext & {usagePurpose?: "facts
 export declare function extractUsageOnSubmit(ctx: DriverContext, taskData: unknown): Readonly<Record<string, string | number | boolean>> | null;
 export declare function extractUsageOnComplete(task: TaskQueryContext, result: NormalizedTaskResult, data: unknown): Readonly<Record<string, string | number | boolean>> | null;
 export declare function listArtifacts(task: {taskId: string; status: string; action: string; data: unknown; producerVersion: string}): readonly TaskArtifact[];
-export declare function buildContentRequest(ctx: DriverContext & {artifactKey: string; data: unknown; state?: unknown; upstreamTaskId: string; clientRequest: {method: "GET" | "HEAD"; headers: Readonly<Record<string, string>>}}): RequestDescriptor;
+export declare function buildContentRequest(ctx: DriverContext & {artifactKey: string; data: unknown; state?: unknown; upstreamTaskId: string; contentRefreshed?: boolean; clientRequest: {method: "GET" | "HEAD"; headers: Readonly<Record<string, string>>}}): ContentRequestDescriptor;

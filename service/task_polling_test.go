@@ -5,6 +5,7 @@ import (
 	"context"
 	"io"
 	"net/http"
+	"os"
 	"strings"
 	"sync"
 	"testing"
@@ -18,8 +19,12 @@ import (
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/relaykit/dto"
 	"github.com/bytedance/gopkg/util/gopool"
+	"github.com/glebarez/sqlite"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"gorm.io/driver/mysql"
+	"gorm.io/driver/postgres"
+	"gorm.io/gorm"
 )
 
 type taskPollingFetchAdaptor struct {
@@ -1074,6 +1079,79 @@ func TestUpdateBatchTasksPollClassification(t *testing.T) {
 				assert.Zero(t, persisted.Quota)
 			} else {
 				assert.Equal(t, initialQuota, getUserQuota(t, userID))
+			}
+		})
+	}
+}
+
+// DSNs must point at isolated test databases. This exercises the real task JSON
+// persistence path without changing schema or settling any unrelated account.
+func TestSpeechPollingSnapshotDatabaseMatrix(t *testing.T) {
+	for _, dialect := range []common.DatabaseType{common.DatabaseTypeSQLite, common.DatabaseTypeMySQL, common.DatabaseTypePostgreSQL} {
+		t.Run(string(dialect), func(t *testing.T) {
+			var driver gorm.Dialector = sqlite.Open(":memory:")
+			if dialect != common.DatabaseTypeSQLite {
+				env := "TEST_SPEECH_MYSQL_DSN"
+				if dialect == common.DatabaseTypePostgreSQL {
+					env = "TEST_SPEECH_POSTGRES_DSN"
+				}
+				dsn := os.Getenv(env)
+				if dsn == "" {
+					t.Skip(env + " is not configured")
+				}
+				if dialect == common.DatabaseTypeMySQL {
+					driver = mysql.Open(dsn)
+				} else {
+					driver = postgres.New(postgres.Config{DSN: dsn, PreferSimpleProtocol: true})
+				}
+			}
+			db, err := gorm.Open(driver, &gorm.Config{})
+			require.NoError(t, err)
+			sqlDB, err := db.DB()
+			require.NoError(t, err)
+			t.Cleanup(func() { require.NoError(t, sqlDB.Close()) })
+			oldDB, oldMain, oldLog := model.DB, common.MainDatabaseType(), common.LogDatabaseType()
+			model.DB = db
+			common.SetDatabaseTypes(dialect, oldLog)
+			t.Cleanup(func() { model.DB = oldDB; common.SetDatabaseTypes(oldMain, oldLog) })
+			require.NoError(t, db.AutoMigrate(&model.Task{}))
+			versionQuery := "SELECT version()"
+			if dialect == common.DatabaseTypeSQLite {
+				versionQuery = "SELECT sqlite_version()"
+			}
+			var version string
+			require.NoError(t, db.Raw(versionQuery).Scan(&version).Error)
+			t.Logf("database: %s", version)
+			for _, tc := range []struct {
+				name, snapshot, want string
+			}{
+				{"compact", `{"data":{"audio_url":"https://cdn.example/a.mp3","req_text_length":5}}`, `{"data":{"audio_url":"https://cdn.example/a.mp3","req_text_length":5}}`},
+				{"legacy", "", `{"sentences":[{"text":"spoken text"}]}`},
+				{"explicit_null", "null", "null"},
+			} {
+				t.Run(tc.name, func(t *testing.T) {
+					task := &model.Task{TaskID: "speech_snapshot_" + tc.name, ChannelId: 1, Platform: constant.TaskPlatform("volcengine-speech"),
+						Action: "text_to_speech", Status: model.TaskStatusInProgress, Data: []byte(`{}`),
+						Properties:  model.Properties{OriginModelName: "seed-tts-2.0", UpstreamModelName: "seed-tts-2.0"},
+						PrivateData: model.TaskPrivateData{UpstreamTaskID: "remote_" + tc.name}}
+					require.NoError(t, db.Create(task).Error)
+					t.Cleanup(func() { require.NoError(t, db.Delete(task).Error) })
+					parsed := &relaycommon.TaskInfo{Status: model.TaskStatusInProgress, Progress: "50%"}
+					if tc.snapshot != "" {
+						parsed.PluginTaskData = []byte(tc.snapshot)
+					}
+					adaptor := &scriptedPollingAdaptor{body: []byte(`{"sentences":[{"text":"spoken text"}]}`), parse: parsed}
+					ch := &model.Channel{Id: 1, Key: "test", Status: common.ChannelStatusEnabled}
+					for range 2 {
+						require.NoError(t, updateVideoSingleTask(t.Context(), adaptor, ch, task.GetUpstreamTaskID(), map[string]*model.Task{task.GetUpstreamTaskID(): task}))
+						var saved model.Task
+						require.NoError(t, db.First(&saved, task.ID).Error)
+						assert.JSONEq(t, tc.want, string(saved.Data))
+						assert.Equal(t, "seed-tts-2.0", saved.Properties.OriginModelName)
+						assert.Equal(t, task.PrivateData.UpstreamTaskID, saved.PrivateData.UpstreamTaskID)
+						assert.Zero(t, saved.Quota)
+					}
+				})
 			}
 		})
 	}
