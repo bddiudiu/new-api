@@ -11,7 +11,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-var expectedKeys = []string{"alibaba", "doubao", "google", "hailuo", "jimeng", "kling", "minimax-tts", "sora", "sunoapi", "vertex-ai", "vidu", "xai"}
+var expectedKeys = []string{"alibaba", "alibaba-speech", "doubao", "google", "hailuo", "jimeng", "kling", "minimax-tts", "sora", "sunoapi", "vertex-ai", "vidu", "volcengine-speech", "xai"}
 
 func TestBuiltInVendorPluginsDeclareNativeRoutesAndLegacyChannelTypes(t *testing.T) {
 	generation := jsplugin.DefaultRegistry.Generation()
@@ -26,6 +26,10 @@ func TestBuiltInVendorPluginsDeclareNativeRoutesAndLegacyChannelTypes(t *testing
 		renderer  string
 	}{
 		{"POST", "/kling/v1/videos/text2video", "kling", jsplugin.RouteTypeSubmit, "text_to_video", "taskCreated"},
+		{"POST", "/alibaba-speech/v1/audio/transcriptions", "alibaba-speech", jsplugin.RouteTypeSubmit, "", "taskCreated"},
+		{"GET", "/alibaba-speech/v1/tasks/:task_id", "alibaba-speech", jsplugin.RouteTypeQuery, "", "taskStatus"},
+		{"POST", "/volcengine-speech/v1/audio/transcriptions", "volcengine-speech", jsplugin.RouteTypeSubmit, "", "taskCreated"},
+		{"GET", "/volcengine-speech/v1/tasks/:task_id", "volcengine-speech", jsplugin.RouteTypeQuery, "", "taskStatus"},
 		{"POST", "/kling/v1/videos/image2video", "kling", jsplugin.RouteTypeSubmit, "image_to_video", "taskCreated"},
 		{"GET", "/kling/v1/videos/text2video/:task_id", "kling", jsplugin.RouteTypeQuery, "", "taskStatus"},
 		{"GET", "/kling/v1/videos/image2video/:task_id", "kling", jsplugin.RouteTypeQuery, "", "taskStatus"},
@@ -117,9 +121,15 @@ func TestBuiltInTaskPluginResponsesAndUsageContracts(t *testing.T) {
 			require.NoError(t, registerErr)
 
 			var responsesClaim jsplugin.ProtocolClaim
-			if key == "minimax-tts" {
+			if plugin.Meta.ProtocolSupports(jsplugin.ProtocolOpenAISpeech, "sync") {
 				assert.True(t, plugin.Meta.ProtocolSupports(jsplugin.ProtocolOpenAISpeech, "sync"))
 				for _, model := range plugin.Meta.Models {
+					schema, _ := plugin.Meta.UsageForModels(model)
+					if _, asr := schema["audio_seconds"]; asr {
+						_, claimed := registry.Generation().LookupEndpoint("POST", "/v1/audio/speech", model)
+						assert.False(t, claimed, model)
+						continue
+					}
 					binding, claimed := registry.Generation().LookupEndpoint("POST", "/v1/audio/speech", model)
 					require.True(t, claimed, model)
 					assert.Same(t, plugin, binding.Plugin)
@@ -172,7 +182,7 @@ func TestBuiltInResponsesDecodersEchoChannelMappedAlias(t *testing.T) {
 			upstreamModel := plugin.Meta.Models[0]
 			body := map[string]any{"model": alias, "input": "a cat walking on the beach"}
 			protocol := "openai_responses"
-			if key == "minimax-tts" {
+			if plugin.Meta.ProtocolSupports(jsplugin.ProtocolOpenAISpeech, "sync") {
 				protocol = jsplugin.ProtocolOpenAISpeech
 				body["voice"] = "female-shaonv"
 			}

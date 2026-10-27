@@ -557,6 +557,9 @@ func updateVideoSingleTask(ctx context.Context, adaptor TaskPollingAdaptor, ch *
 	}
 
 	task.Data = redactVideoResponseBody(responseBody)
+	if taskResult.PluginTaskData != nil {
+		task.Data = redactVideoResponseBody(taskResult.PluginTaskData)
+	}
 	if len(taskResult.PluginState) > 0 {
 		task.PrivateData.PluginState = taskResult.PluginState
 	}
