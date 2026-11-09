@@ -26,8 +26,7 @@ import {
   splitBillingExprAndRequestRules,
 } from './billing-expr'
 import { evaluateBillingExpression } from './billing-expression/runtime'
-
-export const TASK_TOKEN_PRICE_SCALE = 1_000_000
+import { taskUsagePriceScale } from './task-usage-unit'
 
 export type TaskVisualCondition = {
   field: string
@@ -261,9 +260,7 @@ export function evaluateTaskVisualConfig(
     const quantity = Number(sample[field])
     if (!Number.isFinite(quantity) || quantity < 0) return null
     const amount =
-      schema?.[field]?.unit === 'token'
-        ? (quantity * unitPrice) / TASK_TOKEN_PRICE_SCALE
-        : quantity * unitPrice
+      (quantity * unitPrice) / taskUsagePriceScale(schema?.[field]?.unit)
     if (!Number.isFinite(amount)) return null
     parts.push({ kind: 'usage', field, amount, quantity, unitPrice })
   }
@@ -275,7 +272,8 @@ export function evaluateTaskVisualConfig(
   for (const part of parts) {
     if (part.kind !== 'usage' || !part.field) continue
     normalizedUsage[part.field] = part.quantity ?? 0
-    const scale = schema?.[part.field]?.unit === 'token' ? ' / 1000000' : ''
+    const priceScale = taskUsagePriceScale(schema?.[part.field]?.unit)
+    const scale = priceScale === 1 ? '' : ` / ${priceScale}`
     terms.push(`u(${JSON.stringify(part.field)}) * ${part.unitPrice}${scale}`)
   }
   const result = evaluateBillingExpression(
@@ -348,10 +346,9 @@ function generateTaskTierBody(
   if (tier.constant > 0) parts.push(String(tier.constant))
   for (const [field, definition] of numberFields) {
     const price = tier.unitPrices[field] ?? 0
-    if (definition.unit === 'token') {
-      parts.push(
-        `u(${JSON.stringify(field)}) * ${price} / ${TASK_TOKEN_PRICE_SCALE}`
-      )
+    const scale = taskUsagePriceScale(definition.unit)
+    if (scale !== 1) {
+      parts.push(`u(${JSON.stringify(field)}) * ${price} / ${scale}`)
       continue
     }
     parts.push(`u(${JSON.stringify(field)}) * ${price}`)

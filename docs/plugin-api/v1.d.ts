@@ -20,6 +20,8 @@ export interface HostUtils {
   volcSignV4(request: {method: string; url: string; headers?: Record<string, string>; body?: string; accessKey: string; secretKey: string; region?: string; service?: string; timestamp?: number}): Record<string, string>;
   /** Synchronous read-only request from driver hooks to the channel Base URL host or allowedHosts. At most 4 per hook call, 15 s each, 30 s in total, 1 MiB per body; redirects are returned, not followed. */
   fetch(request: FetchRequest): FetchResponse;
+  /** Credentialless public audio probe in buildSubmitRequest/extractUsage only. One URL per hook, 30 s, at most 64 MiB and 3600 seconds. Cached per submission; no file bytes are exposed. */
+  audioDuration(url: string): number;
 }
 export interface FetchRequest {url: string; method?: "GET" | "HEAD"; headers?: Record<string, string>; responseType?: "json" | "bytes"}
 /** headers holds the first value of each header under its canonical name; body is parsed JSON when the response parses, otherwise text, and "" for HEAD; with responseType "bytes" it is an ArrayBuffer of the response bytes. */
@@ -40,20 +42,23 @@ export type SubmitIntent = {kind: "submit"; model: string; action?: string; requ
 export type QueryIntent = {kind: "query"; taskIds: readonly string[]};
 export type TaskIntent = SubmitIntent | QueryIntent;
 export interface NativeRoute {method: "GET" | "POST" | "PUT" | "PATCH" | "DELETE"; /** The vendor's own path; the host also serves it under /{key} unless its first segment is the key or a proper prefix of it. */ path: string; type: "submit" | "query" | "dynamic"; action?: string; /** Query routes: the path parameter carrying the gateway task id or, when the path has none, the query-string parameter of that name. Default "task_id". */ taskIdParam?: string; decode?: string; render: string; models?: readonly string[]; retainResult?: boolean}
-export type ProtocolName = "openai_responses" | "openai_video" | "openai_image";
+export type ProtocolName = "openai_responses" | "openai_video" | "openai_image" | "openai_speech";
 export type ResponsesMode = "stream" | "sync" | "background";
 export type ProtocolClaim =
   | "openai_video"
   | "openai_image"
   | {name: "openai_responses"; supports: readonly ResponsesMode[]; models?: readonly string[]}
+  | {name: "openai_speech"; supports: readonly "sync"[]; models?: readonly string[]}
   | {name: "openai_video"; models?: readonly string[]}
   | {name: "openai_image"; models?: readonly string[]};
 /** One entry of the OpenAI ImageResponse `data` array rendered by protocols.openai_image.render. */
 export type ImageResponseEntry = {url?: string; b64_json?: string; revised_prompt?: string};
+/** Selects a completed MP3 audio artifact. The host returns its bytes. */
+export type SpeechResponseDescriptor = {artifactKey: string};
 export type LocalizedText = string | ({ en: string } & Record<string, string>);
 export type UsageFieldSchema =
   | {type: "number"; unit: "count"; unitLabel?: LocalizedText; description?: LocalizedText}
-  | {type: "number"; unit: "second" | "token" | "credit"; unitLabel?: never; description?: LocalizedText}
+  | {type: "number"; unit: "second" | "token" | "credit" | "character"; unitLabel?: never; description?: LocalizedText}
   | {type: "boolean"; unitLabel?: never; description?: LocalizedText}
   | {enum: readonly string[]; unitLabel?: never; description?: LocalizedText; enumLabels?: Readonly<Record<string, LocalizedText>>};
 export type UsageExample = {label: string; facts: Readonly<Record<string, string | number | boolean>>};
@@ -65,8 +70,10 @@ export interface TaskQueryContext {taskId: string; publicTaskId: string; action:
 export interface BatchQueryContext {baseUrl: string; apiKey?: string; authHeader: string; auth?: unknown; upstream: UpstreamContext; tasks: readonly TaskQueryContext[]}
 export type HookHTTPResponse = {readonly status: number; readonly headers: Readonly<Record<string, string>>}
 export interface RequestDescriptor {responseType?: "json" | "sse"; url: string; method?: string; headers?: Record<string, string>; /** JSON body may contain FilePlaceholder objects at any depth; the host replaces each with a Base64 or data-URL string. */ body?: unknown; credentialless?: boolean; action?: string; model?: string; rewriteModel?: string; bodyType?: "json" | "multipart"; parts?: readonly {name: string; value?: unknown; fileRef?: string; filename?: string}[]; /** buildContentRequest only: the artifact's bytes are the base64 string at this path of the JSON reply, a long-running operation. String keys and non-negative integer indices, at most 32 segments. */ contentPath?: readonly (string | number)[]; /** buildContentRequest with contentPath: the artifact's media type, default "video/mp4". */ mimeType?: string}
+/** A successful task may be re-queried once for an expired artifact URL, without settlement or persistence. */
+export type ContentRequestDescriptor = RequestDescriptor | {refreshTask: true};
 export interface UpstreamResponse {statusCode: number; headers: Readonly<Record<string, readonly string[]>>; body: unknown}
-export interface NormalizedTaskResult {taskId?: string; status: "NOT_START" | "SUBMITTED" | "QUEUED" | "IN_PROGRESS" | "SUCCESS" | "FAILURE" | "UNKNOWN"; progress?: string; reason?: string; url?: string; remoteUrl?: string; completionTokens?: number; totalTokens?: number}
+export interface NormalizedTaskResult {/** Optional compact single-task polling snapshot; omitted preserves raw upstream data. */ taskData?: JSONValue; taskId?: string; status: "NOT_START" | "SUBMITTED" | "QUEUED" | "IN_PROGRESS" | "SUCCESS" | "FAILURE" | "UNKNOWN"; progress?: string; reason?: string; url?: string; remoteUrl?: string; completionTokens?: number; totalTokens?: number}
 export interface TaskArtifact {key: string; type: "video" | "audio" | "image" | "file"; mimeType?: string}
 export declare const meta: Meta;
 /** A query presenter's context: artifacts holds the gateway download addresses of one task in SUCCESS (from listArtifacts) and is empty otherwise. Throwing "artifact_not_found" answers 404. */
@@ -77,7 +84,8 @@ export declare const native: Record<string, ((ctx: NativeDecodeContext) => TaskI
 export declare const protocols: {
   openai_responses?: {decodeRequest(ctx: ProtocolDecodeContext): SubmitIntent; renderEvents?(ctx: unknown, task: TaskView, previousState: unknown): unknown; renderFinal?(ctx: unknown, task: TaskView): unknown};
   openai_video?: {decodeRequest(ctx: ProtocolDecodeContext): SubmitIntent; render(ctx: unknown, task: TaskView): unknown};
-  /** render returns the OpenAI ImageResponse; the host adds `created` when absent and resolves response_format b64_json. */
+  openai_speech?: {decodeRequest(ctx: ProtocolDecodeContext): SubmitIntent; render(ctx: unknown, task: TaskView): SpeechResponseDescriptor};
+  /** The final decode and render receive the current channel's parameter overrides. render returns the OpenAI ImageResponse; the host adds `created` when absent and resolves the effective response_format b64_json. */
   openai_image?: {decodeRequest(ctx: ProtocolDecodeContext): SubmitIntent; render(ctx: unknown, task: TaskView): {created?: number; data: readonly ImageResponseEntry[]} & Record<string, unknown>};
 };
 export declare function buildSubmitRequest(ctx: DriverContext): RequestDescriptor;
@@ -100,4 +108,4 @@ export declare function extractUsage(ctx: DriverContext & {usagePurpose?: "facts
 export declare function extractUsageOnSubmit(ctx: DriverContext, taskData: unknown): Readonly<Record<string, string | number | boolean>> | null;
 export declare function extractUsageOnComplete(task: TaskQueryContext, result: NormalizedTaskResult, data: unknown): Readonly<Record<string, string | number | boolean>> | null;
 export declare function listArtifacts(task: {taskId: string; status: string; action: string; data: unknown; producerVersion: string}): readonly TaskArtifact[];
-export declare function buildContentRequest(ctx: DriverContext & {artifactKey: string; data: unknown; state?: unknown; upstreamTaskId: string; clientRequest: {method: "GET" | "HEAD"; headers: Readonly<Record<string, string>>}}): RequestDescriptor;
+export declare function buildContentRequest(ctx: DriverContext & {artifactKey: string; data: unknown; state?: unknown; upstreamTaskId: string; contentRefreshed?: boolean; clientRequest: {method: "GET" | "HEAD"; headers: Readonly<Record<string, string>>}}): ContentRequestDescriptor;

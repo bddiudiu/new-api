@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"mime"
 	"net"
 	"net/http"
 	"net/url"
@@ -132,7 +133,16 @@ func VideoProxy(c *gin.Context) {
 	}
 }
 
+type taskMediaDeliveryPolicy struct {
+	mimeType string
+	maxBytes int64
+}
+
 func proxyTaskMedia(c *gin.Context, task *model.Task, descriptor *relaychannel.TaskContentRequest) error {
+	return proxyTaskMediaWithPolicy(c, task, descriptor, nil)
+}
+
+func proxyTaskMediaWithPolicy(c *gin.Context, task *model.Task, descriptor *relaychannel.TaskContentRequest, policy *taskMediaDeliveryPolicy) error {
 	if descriptor == nil {
 		return &taskMediaProxyError{
 			status: http.StatusInternalServerError, code: "artifact_plugin_error",
@@ -147,6 +157,9 @@ func proxyTaskMedia(c *gin.Context, task *model.Task, descriptor *relaychannel.T
 		}
 	}
 	if strings.HasPrefix(rawURL, "data:") {
+		if policy != nil {
+			return errTaskMediaRequestRejected
+		}
 		if len(rawURL) > taskMediaDataURLMaxEncodedBytes {
 			return &taskMediaProxyError{
 				status: http.StatusBadGateway, code: "artifact_request_rejected",
@@ -255,7 +268,7 @@ func proxyTaskMedia(c *gin.Context, task *model.Task, descriptor *relaychannel.T
 	}
 	// Range and validators address the media, not a JSON reply carrying it.
 	clientHeaders := map[string]string{}
-	if len(descriptor.ContentPath) == 0 {
+	if policy == nil && len(descriptor.ContentPath) == 0 {
 		clientHeaders = taskArtifactClientHeaders(c.Request.Header)
 	}
 	for name, value := range clientHeaders {
@@ -263,6 +276,15 @@ func proxyTaskMedia(c *gin.Context, task *model.Task, descriptor *relaychannel.T
 	}
 
 	client = taskMediaRedirectClient(client, proxy, c, clientHeaders, descriptor.Credentialless)
+	if policy != nil {
+		checkRedirect := client.CheckRedirect
+		client.CheckRedirect = func(req *http.Request, via []*http.Request) error {
+			if len(via) > 0 && via[len(via)-1].URL.Scheme == "https" && req.URL.Scheme != "https" {
+				return errTaskMediaRequestRejected
+			}
+			return checkRedirect(req, via)
+		}
+	}
 	clientWithoutBodyTimeout := *client
 	clientWithoutBodyTimeout.Timeout = 0
 	resp, err := doTaskMediaRequest(&clientWithoutBodyTimeout, req, taskMediaResponseHeaderTimeout)
@@ -286,6 +308,24 @@ func proxyTaskMedia(c *gin.Context, task *model.Task, descriptor *relaychannel.T
 		}
 	}
 	defer resp.Body.Close()
+	if policy != nil && (resp.StatusCode >= 200 && resp.StatusCode < 400 || resp.StatusCode == http.StatusRequestedRangeNotSatisfiable) {
+		mediaType, _, _ := mime.ParseMediaType(resp.Header.Get("Content-Type"))
+		if resp.StatusCode != http.StatusOK || (mediaType != policy.mimeType && mediaType != "audio/mp3" && mediaType != "application/octet-stream") || resp.ContentLength > policy.maxBytes {
+			return &taskMediaProxyError{status: http.StatusBadGateway, code: "artifact_invalid_content", message: "Artifact content does not match the requested audio format or size limit"}
+		}
+		body, readErr := io.ReadAll(io.LimitReader(resp.Body, policy.maxBytes+1))
+		if readErr != nil || len(body) == 0 || int64(len(body)) > policy.maxBytes {
+			return &taskMediaProxyError{status: http.StatusBadGateway, code: "artifact_invalid_content", message: "Failed to read bounded audio content", err: readErr}
+		}
+		// MP3 starts with an ID3 tag or an MPEG audio frame. Do not relabel
+		// an HTML/JSON error page as a successful speech response.
+		if policy.mimeType == "audio/mpeg" && !bytes.HasPrefix(body, []byte("ID3")) && !(len(body) >= 2 && body[0] == 0xff && body[1]&0xe0 == 0xe0) {
+			return &taskMediaProxyError{status: http.StatusBadGateway, code: "artifact_invalid_content", message: "Artifact content is not MP3 audio"}
+		}
+		setTaskMediaResponseSecurityHeaders(c.Writer.Header())
+		c.Data(http.StatusOK, policy.mimeType, body)
+		return nil
+	}
 
 	if len(descriptor.ContentPath) > 0 && resp.StatusCode == http.StatusOK {
 		return writeTaskMediaContentPath(c, resp.Body, descriptor)

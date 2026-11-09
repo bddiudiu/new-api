@@ -1129,6 +1129,8 @@ type TaskInfo struct {
 	TotalTokens      int             `json:"total_tokens,omitempty"`      // 用于按倍率计费
 	UsageFacts       map[string]any  `json:"usage_facts,omitempty"`
 	PluginState      json.RawMessage `json:"plugin_state,omitempty"`
+	// Optional compact polling snapshot; nil preserves the raw-response contract.
+	PluginTaskData json.RawMessage `json:"-"`
 }
 
 func FailTaskInfo(reason string) *TaskInfo {

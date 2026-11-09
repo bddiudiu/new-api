@@ -53,6 +53,7 @@ function formatUsageUnit(
   if (unit === 'count') return t('Count')
   if (unit === 'token') return t('token (unit)')
   if (unit === 'credit') return t('credit')
+  if (unit === 'character') return t('character')
   return '—'
 }
 

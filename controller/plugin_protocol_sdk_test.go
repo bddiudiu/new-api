@@ -2,8 +2,10 @@ package controller
 
 import (
 	"context"
+	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -13,6 +15,7 @@ import (
 	"github.com/QuantumNous/new-api/model"
 	pluginruntime "github.com/QuantumNous/new-api/pkg/jsplugin"
 	builtinplugins "github.com/QuantumNous/new-api/plugins"
+	relaychannel "github.com/QuantumNous/new-api/relay/channel"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/gin-gonic/gin"
 	"github.com/openai/openai-go"
@@ -302,4 +305,96 @@ func newPluginProtocolSDKTestServer(
 		})
 		serveTaskPluginProtocol(c, pinned, deps)
 	}))
+}
+
+func TestMiniMaxSpeechReturnsAudioToOfficialSDKAndKeepsFailedDownloads(t *testing.T) {
+	for _, tc := range []struct {
+		name, contentType, body string
+		status                  int
+		wantError               bool
+	}{
+		{"mp3", "audio/mpeg", "ID3speech-audio", 200, false},
+		{"cdn binary", "application/octet-stream", "ID3speech-audio", 200, false},
+		{"expired URL", "text/plain", "expired", 404, true},
+		{"unexpected range response", "text/plain", "invalid range", 416, true},
+		{"wrong MIME", "text/html", "<html>error</html>", 200, true},
+		{"invalid payload", "audio/mpeg", "not audio", 200, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			task := setupGenericTaskTest(t)
+			allowPrivateTaskMediaTest(t)
+			cdn := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				assert.Empty(t, r.Header.Get("Authorization"))
+				assert.Empty(t, r.Header.Get("Cookie"))
+				assert.Empty(t, r.Header.Get("Range"))
+				w.Header().Set("Content-Type", tc.contentType)
+				w.Header().Set("Set-Cookie", "private=value")
+				w.WriteHeader(tc.status)
+				_, _ = io.WriteString(w, tc.body)
+			}))
+			defer cdn.Close()
+			source, err := builtinplugins.Source("minimax-tts")
+			require.NoError(t, err)
+			registry := pluginruntime.NewRegistry()
+			plugin, err := registry.RegisterFactory(source, pluginruntime.Options{})
+			require.NoError(t, err)
+			task.Platform = "minimax-tts"
+			task.SetData(map[string]any{"audio_url": cdn.URL, "usage_characters": 4})
+			require.NoError(t, model.DB.Save(task).Error)
+			pinned := pluginruntime.PinnedEndpoint{Plugin: plugin, Generation: registry.Generation(), Protocol: pluginruntime.ProtocolOpenAISpeech, Model: "speech-2.8-turbo"}
+			submissions := 0
+			deps := pluginProtocolTestDeps()
+			deps.submit = func(_ *gin.Context, info *relaycommon.RelayInfo) (*taskSubmissionOutcome, *dto.TaskError) {
+				submissions++
+				info.ChannelMeta = &relaycommon.ChannelMeta{ChannelId: 1, ChannelBaseUrl: cdn.URL, ApiKey: "provider-secret"}
+				return &taskSubmissionOutcome{Task: task, RelayInfo: info}, nil
+			}
+			engine := gin.New()
+			engine.POST("/v1/audio/speech", func(c *gin.Context) {
+				var body map[string]any
+				require.NoError(t, common.DecodeJson(c.Request.Body, &body))
+				c.Set("resolved_task_model", "speech-2.8-turbo")
+				common.SetContextKey(c, constant.ContextKeyUserId, 7)
+				c.Set(pluginruntime.ContextKeyProtocolRequest, pluginruntime.ProtocolRequestContext{Protocol: pluginruntime.ProtocolOpenAISpeech, Model: "speech-2.8-turbo", RouteRequestContext: pluginruntime.RouteRequestContext{Body: map[string]any{"kind": "json", "value": body}}})
+				serveTaskPluginMediaProtocol(c, pinned, deps)
+			})
+			server := httptest.NewServer(engine)
+			defer server.Close()
+			client := openai.NewClient(option.WithBaseURL(server.URL+"/v1/"), option.WithAPIKey("gateway-key"), option.WithMaxRetries(0))
+			response, err := client.Audio.Speech.New(t.Context(), openai.AudioSpeechNewParams{Input: "你好", Model: "speech-2.8-turbo", Voice: openai.AudioSpeechNewParamsVoice("female-shaonv")}, option.WithHeader("Range", "bytes=0-3"))
+			assert.Equal(t, 1, submissions)
+			if tc.wantError {
+				require.Error(t, err)
+			} else {
+				require.NoError(t, err)
+				defer response.Body.Close()
+				body, err := io.ReadAll(response.Body)
+				require.NoError(t, err)
+				assert.Equal(t, tc.body, string(body))
+				assert.Equal(t, "audio/mpeg", response.Header.Get("Content-Type"))
+				assert.Equal(t, task.TaskID, response.Header.Get("X-New-API-Task-ID"))
+				assert.Empty(t, response.Header.Get("Set-Cookie"))
+			}
+			var stored model.Task
+			require.NoError(t, model.DB.First(&stored, task.ID).Error)
+			assert.True(t, stored.ResultRetrievable())
+			assert.Contains(t, string(stored.Data), cdn.URL)
+		})
+	}
+}
+
+func TestSpeechMediaDeliveryRejectsOversizedBodyWithoutContentLength(t *testing.T) {
+	task := setupGenericTaskTest(t)
+	allowPrivateTaskMediaTest(t)
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "audio/mpeg")
+		w.(http.Flusher).Flush()
+		_, _ = io.WriteString(w, "ID3too-large")
+	}))
+	defer upstream.Close()
+	c, _ := gin.CreateTestContext(httptest.NewRecorder())
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/audio/speech", strings.NewReader(`{}`))
+	err := proxyTaskMediaWithPolicy(c, task, &relaychannel.TaskContentRequest{URL: upstream.URL, Method: http.MethodGet, Credentialless: true}, &taskMediaDeliveryPolicy{mimeType: "audio/mpeg", maxBytes: 4})
+	require.Error(t, err)
+	assert.False(t, c.Writer.Written())
 }

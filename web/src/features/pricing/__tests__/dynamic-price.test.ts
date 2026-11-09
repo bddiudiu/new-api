@@ -798,3 +798,25 @@ describe('shared plugin price summaries', () => {
     })
   })
 })
+
+test('character pricing keeps USD per 10K across token display units and time tiers', () => {
+  const model = pricingModel({
+    billing_mode: 'tiered_expr',
+    billing_expr: 'tier("tts", u("characters") * 0.3 / 10000)',
+    billing_usage_schema: { characters: { type: 'number', unit: 'character' } },
+  })
+  for (const tokenUnit of ['K', 'M'] as const) {
+    const summary = getDynamicPricingSummary(model, { tokenUnit })
+    assert.ok(summary)
+    expect(summary?.isSpecialExpression).toBe(false)
+    expect(summary?.entries[0].value).toBeCloseTo(0.3)
+    expect(getDynamicPriceUnitLabelKey(summary.entries[0])).toBe(
+      '10K characters'
+    )
+  }
+  expect(getTaskUsagePriceUnitLabelKey('character')).toBe('10K characters')
+  model.billing_expr =
+    'hour("UTC") < 12 ? tier("morning", u("characters") * 0.3 / 10000) : tier("evening", u("characters") * 0.6 / 10000)'
+  const summary = getDynamicPricingSummary(model, { tokenUnit: 'K' })
+  expect(summary?.isSpecialExpression).toBe(false)
+})

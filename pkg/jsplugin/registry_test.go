@@ -204,7 +204,7 @@ func TestRegistryDecodesAndValidatesUsageSchema(t *testing.T) {
 		{
 			name:          "unsupported numeric unit",
 			declaration:   `{type: "number", unit: "minute"}`,
-			expectedError: "unit must be second, count, token, or credit",
+			expectedError: "unit must be second, count, token, credit, or character",
 		},
 		{
 			name:          "boolean cannot mix unit",
@@ -1265,6 +1265,25 @@ export function parseSubmitEventDelta(){return {changes:[],state:null,done:true}
 			if tc.valid {
 				require.NoError(t, err)
 				require.NoError(t, ValidateV1Meta(plugin.Meta))
+			} else {
+				require.Error(t, err)
+			}
+		})
+	}
+}
+
+func TestCharacterUsageExamplesRequireBoundedIntegers(t *testing.T) {
+	for _, tc := range []struct {
+		value string
+		valid bool
+	}{
+		{"0", true}, {"2000000", true}, {"2000001", false}, {"0.5", false}, {"-1", false}, {`"4"`, false},
+	} {
+		t.Run(tc.value, func(t *testing.T) {
+			source := routingTestPluginSource("characters", 0, `["speech"]`, `usageSchema:{characters:{type:"number",unit:"character"}},usageExamples:[{label:"sample",facts:{characters:`+tc.value+`}}],`, "")
+			_, err := CompilePlugin(source, Options{})
+			if tc.valid {
+				require.NoError(t, err)
 			} else {
 				require.Error(t, err)
 			}

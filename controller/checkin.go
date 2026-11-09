@@ -54,7 +54,12 @@ func DoCheckin(c *gin.Context) {
 		common.ApiError(c, err)
 		return
 	}
-	model.RecordLog(userId, model.LogTypeSystem, common.NewMessage("Daily check-in, received {{quota}}", map[string]any{"quota": logger.FormatQuota(checkin.QuotaAwarded)}))
+	content := common.NewMessage("Daily check-in, received {{quota}}", map[string]any{"quota": logger.FormatQuota(checkin.QuotaAwarded)})
+	other := model.NewLogOther()
+	other.SetPublic("content_parts", []*common.Message{content})
+	if err := model.RecordLogWithQuota(userId, model.LogTypeCheckin, checkin.QuotaAwarded, content.Error(), other.JSONString(), c); err != nil {
+		common.SysError(common.LogText("failed to record check-in quota log: %s", err.Error()))
+	}
 	common.ApiSuccessT(c, "Check-in successful", gin.H{
 		"quota_awarded": checkin.QuotaAwarded,
 		"checkin_date":  checkin.CheckinDate,

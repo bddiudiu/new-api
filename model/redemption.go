@@ -5,7 +5,6 @@ import (
 	"strconv"
 
 	"github.com/QuantumNous/new-api/common"
-	"github.com/QuantumNous/new-api/logger"
 
 	"gorm.io/gorm"
 )
@@ -133,7 +132,7 @@ func GetRedemptionById(id int) (*Redemption, error) {
 	return &redemption, err
 }
 
-func Redeem(key string, userId int) (quota int, err error) {
+func Redeem(key string, userId int, requestIP string) (quota int, err error) {
 	if key == "" {
 		return 0, errors.New("redemption code not provided")
 	}
@@ -181,7 +180,27 @@ func Redeem(key string, userId int) (quota int, err error) {
 		return 0, ErrRedeemFailed
 	}
 	syncCreditUserQuotaCache(userId, redemption.Quota, common.LogText("redemption"))
-	RecordLog(userId, LogTypeTopup, common.NewMessage("Topped up {{quota}} with a redemption code, code ID {{id}}", map[string]any{"quota": logger.FormatQuota(redemption.Quota), "id": redemption.Id}))
+	user, logErr := GetUserById(userId, false)
+	if logErr != nil {
+		common.SysLog(common.LogText("failed to record topup log: %s", logErr.Error()))
+		return redemption.Quota, nil
+	}
+	message := common.NewMessage("Topped up {{quota}} with a redemption code, code ID {{id}}", map[string]any{
+		"quota": redemption.Quota,
+		"id":    redemption.Id,
+	})
+	other := NewLogOther()
+	other.MergeAdmin(map[string]any{
+		"source":        "redemption",
+		"redemption_id": redemption.Id,
+		"request_ip":    requestIP,
+	})
+	recordTopupLog(&Log{
+		UserId:   user.Id,
+		Username: user.Username,
+		Group:    user.Group,
+		Quota:    redemption.Quota,
+	}, message, requestIP, other)
 	return redemption.Quota, nil
 }
 

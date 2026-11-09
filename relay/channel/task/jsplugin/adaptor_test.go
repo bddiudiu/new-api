@@ -2959,3 +2959,25 @@ export function buildContentRequest(ctx) {
 		})
 	}
 }
+
+func TestCharacterUsageFactsRejectFractionalAndOversizedValues(t *testing.T) {
+	adaptor := New(&pluginruntime.LoadedPlugin{Meta: pluginruntime.Meta{UsageSchema: map[string]pluginruntime.UsageFieldSchema{"characters": {Type: "number", Unit: "character"}}}})
+	for _, tc := range []struct {
+		name  string
+		value any
+		valid bool
+	}{
+		{"zero", 0, true}, {"large character count", 2000000, true}, {"above limit", 2000001, false},
+		{"fraction", 1.5, false}, {"negative", -1, false}, {"NaN", math.NaN(), false}, {"infinity", math.Inf(1), false}, {"string", "5", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			facts, _, err := adaptor.validatedUsageRatios(map[string]any{"characters": tc.value})
+			if !tc.valid {
+				require.Error(t, err)
+				return
+			}
+			require.NoError(t, err)
+			assert.EqualValues(t, tc.value, facts["characters"])
+		})
+	}
+}

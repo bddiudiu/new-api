@@ -353,7 +353,7 @@ plugins unchanged. Older hosts reject the new metadata field, so upgrade the
 host before installing a plugin that declares profiles.
 
 Numeric facts are finite, non-negative values in the declared canonical unit
-(`second`, `count`, `token`, or `credit`); enum facts are exact strings from the
+(`second`, `count`, `token`, `credit`, or `character`); enum facts are exact strings from the
 declared value list. The schema description is display-only metadata and never
 affects evaluation. `token` is the host unit for upstream billing tokens (for
 example doubao `usage.completion_tokens`). `credit` is the host unit for vendor
@@ -393,6 +393,9 @@ tier("base", 0.1 + u("seconds") * 0.4 + u("clips") * 0.05)
 # Engine semantics are unchanged: the expression still returns USD.
 tier("base", u("tokens") * 9.8 / 1000000)
 
+# Provider-weighted characters: raw integer quantity, USD per 10,000 characters.
+tier("tts", u("characters") * 0.2 / 10000)
+
 # Vendor credit overlay (kling resource-pack units)
 # The coefficient is the real $/credit price; no /1M scale.
 tier("base", u("units") * 0.14)
@@ -401,6 +404,10 @@ tier("base", u("units") * 0.14)
 The tier body is an optional non-negative constant plus one or more
 `u("<number field>") * <unit price>` terms. Token-unit fields use the
 canonical scaled shape `u("<field>") * <dollars per 1M tokens> / 1000000`.
+Character-unit fields use `u("<field>") * <dollars per 10K characters> / 10000`.
+Their facts and examples must be integers between 0 and 2,000,000, with
+stricter provider input bounds enforced by the plugin. The same scale is used
+by visual editing, simulation and price display; expression output remains USD.
 Credit, second, and count fields keep the bare `u("<field>") * <unit price>`
 shape. Tier conditions are equality checks
 between declared enum fields and values, optionally joined by `&&`, with
@@ -411,7 +418,7 @@ range tiers are not part of the current canonical shape. Request rules after
 Before saving, the host compiles every expression, rejects literal `u()` keys
 that the selected task plugin did not declare, and smoke-tests usage vectors.
 Every numeric field is exercised at 0, 1, and its host-owned unit ceiling
-(`second` 3600, `count` 128, `token`/`credit` int32 max). Enum values are exercised as a
+(`second` 3600, `count` 128, `character` 2,000,000, `token`/`credit` int32 max). Enum values are exercised as a
 Cartesian product. Smoke vectors are capped at
 64, reducing oversized enum dimensions to their first and last values. Every
 evaluated result must be finite and non-negative.

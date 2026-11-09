@@ -17,6 +17,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 import type { BillingUsageSchema } from '../../types'
+import { taskUsagePriceScale } from '../task-usage-unit'
 import { compileBillingExpression } from './parser'
 import { evaluateBillingCondition } from './runtime'
 import {
@@ -390,10 +391,15 @@ function taskTier(
       continue
     }
     const scaled = term.kind === 'binary' && term.operator === '/'
+    let scale = 1
     if (scaled && term.kind === 'binary') {
-      if (term.right.kind !== 'literal' || term.right.value !== 1000000) {
+      if (
+        term.right.kind !== 'literal' ||
+        (term.right.value !== 1000000 && term.right.value !== 10000)
+      ) {
         return null
       }
+      scale = term.right.value
       term = term.left
     }
     if (
@@ -418,7 +424,7 @@ function taskTier(
     ) {
       return null
     }
-    if ((definition.unit === 'token') !== scaled) return null
+    if (taskUsagePriceScale(definition.unit) !== scale) return null
     unitPrices[field] = nonnegativePriceLiteral(term.right) ?? 0
   }
   if (Object.keys(unitPrices).length === 0) return null

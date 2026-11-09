@@ -145,6 +145,10 @@ func validatePrompt(prompt string) *dto.TaskError {
 // overflow quota calculation into a negative charge.
 const MaxTaskDurationSeconds = 3600
 
+// MaxTaskCharacters bounds provider-weighted text usage, independently of
+// image counts and video duration. Providers enforce their own input limits.
+const MaxTaskCharacters = 2_000_000
+
 func validateTaskDurationBounds(req TaskSubmitReq) *dto.TaskError {
 	seconds := req.Duration
 	if seconds == 0 && req.Seconds != "" {

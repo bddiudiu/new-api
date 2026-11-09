@@ -87,6 +87,9 @@ type HostProtocolDefinition struct {
 }
 
 var hostProtocols = []HostProtocolDefinition{
+	{Name: ProtocolOpenAISpeech, Operations: []HostProtocolOperation{
+		{Name: "create", Methods: []string{http.MethodPost}, Path: "/v1/audio/speech", BodyKinds: []BodyKind{BodyJSON}, ModelField: "model", RequiredProtocolMembers: []string{"decodeRequest"}, Modes: []ProtocolMode{{Name: "sync", Hook: "render"}}, RequiredDriverHooks: []string{"listArtifacts", "buildContentRequest"}},
+	}},
 	{Name: "openai_responses", Operations: []HostProtocolOperation{
 		{Name: "create", Methods: []string{http.MethodPost}, Path: "/v1/responses", BodyKinds: []BodyKind{BodyJSON}, ModelField: "model", RequiredProtocolMembers: []string{"decodeRequest"}, Modes: []ProtocolMode{{Name: "stream", Hook: "renderEvents"}, {Name: "sync", Hook: "renderFinal"}, {Name: "background", Hook: "renderFinal"}}},
 		{Name: "retrieve", Methods: []string{http.MethodGet}, Path: "/v1/responses/:response_id", BodyKinds: []BodyKind{BodyNone}},
@@ -108,6 +111,9 @@ var hostProtocols = []HostProtocolDefinition{
 // ProtocolOpenAIImage is the host protocol that serves the OpenAI Images API
 // (`POST /v1/images/generations` and `POST /v1/images/edits`) from a plugin.
 const ProtocolOpenAIImage = "openai_image"
+
+// ProtocolOpenAISpeech serves synchronous audio bytes through task artifacts.
+const ProtocolOpenAISpeech = "openai_speech"
 
 func HostProtocol(name string) (HostProtocolDefinition, bool) {
 	for _, definition := range hostProtocols {
@@ -247,6 +253,9 @@ const (
 	ContextKeyPinnedEndpoint  = "task_plugin_pinned_endpoint"
 	ContextKeyRouteRequest    = "task_plugin_route_request"
 	ContextKeyProtocolRequest = "task_plugin_protocol_request"
+	// ContextKeyEffectiveImageRequest holds the current attempt's image request
+	// after channel overrides. ProtocolRequest remains the immutable retry source.
+	ContextKeyEffectiveImageRequest = "task_plugin_effective_image_request"
 	// ContextKeyRequestBodyText holds, for a plugin that preserves JSON
 	// order, the decoded requestBody as JSON text (json.RawMessage) beside
 	// the Go value in task_request.

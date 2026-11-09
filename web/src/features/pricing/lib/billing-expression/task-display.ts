@@ -17,6 +17,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 import type { BillingUsageSchema } from '../../types'
+import { taskUsagePriceScale } from '../task-usage-unit'
 import type { TaskTier } from './display'
 import { compileBillingExpression } from './parser'
 import { TIME_FUNCTIONS, visitExpression, type ExpressionNode } from './types'
@@ -300,8 +301,7 @@ export function readConditionalTaskPricing(
         const definition = schema[field]
         if (definition.type !== 'number' || !definition.unit) continue
         unitPrices[field] =
-          (branch.prices[field] ?? 0) *
-          (definition.unit === 'token' ? 1_000_000 : 1)
+          (branch.prices[field] ?? 0) * taskUsagePriceScale(definition.unit)
       }
       if (
         !Object.keys(unitPrices).length ||
